@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "assetId": "toy-car-starter",
+      "modelPath": "/assets/models/toy-car-starter.glb",
+      "cardPath": "/assets/cards/toy-car-starter.png",
+      "dimensionsGameXYZ": [
+        1.0,
+        0.826,
+        2.155
+      ],
+      "forwardAxis": "+Z",
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "wheelRadius": 0.275,
+      "triangleCount": 4160,
+      "suggestedColliderGameXYZ": [
+        1.0,
+        0.743,
+        2.026
+      ]
+    },
+    {
+      "assetId": "toy-car-sport",
+      "modelPath": "/assets/models/toy-car-sport.glb",
+      "cardPath": "/assets/cards/toy-car-sport.png",
+      "dimensionsGameXYZ": [
+        1.0,
+        0.7277,
+        2.255
+      ],
+      "forwardAxis": "+Z",
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "wheelRadius": 0.255,
+      "triangleCount": 4284,
+      "suggestedColliderGameXYZ": [
+        1.0,
+        0.655,
+        2.12
+      ]
+    },
+    {
+      "assetId": "toy-car-offroad",
+      "modelPath": "/assets/models/toy-car-offroad.glb",
+      "cardPath": "/assets/cards/toy-car-offroad.png",
+      "dimensionsGameXYZ": [
+        1.0,
+        1.1579,
+        2.1488
+      ],
+      "forwardAxis": "+Z",
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "wheelRadius": 0.345,
+      "triangleCount": 4408,
+      "suggestedColliderGameXYZ": [
+        1.0,
+        1.042,
+        2.02
+      ]
+    },
+    {
+      "assetId": "toy-car-family",
+      "modelPath": "/assets/models/toy-car-family.glb",
+      "cardPath": "/assets/cards/toy-car-family.png",
+      "dimensionsGameXYZ": [
+        1.0,
+        1.2677,
+        2.195
+      ],
+      "forwardAxis": "+Z",
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "wheelRadius": 0.265,
+      "triangleCount": 4448,
+      "suggestedColliderGameXYZ": [
+        1.0,
+        1.141,
+        2.063
+      ]
+    }
+  ]
+}

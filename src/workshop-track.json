@@ -1,0 +1,470 @@
+{
+  "schemaVersion": 1,
+  "id": "workshop-bench",
+  "version": "3.0.0",
+  "length": 280,
+  "lanes": [
+    {
+      "index": 0
+    },
+    {
+      "index": 1
+    },
+    {
+      "index": 2
+    },
+    {
+      "index": 3
+    }
+  ],
+  "startFinish": 0,
+  "checkpoints": [
+    {
+      "id": "checkpoint-back-straight",
+      "progress": 70
+    },
+    {
+      "id": "checkpoint-bench-end",
+      "progress": 140
+    },
+    {
+      "id": "checkpoint-flyover-ramp",
+      "progress": 210
+    }
+  ],
+  "fixedObstacles": [
+    {
+      "id": "obstacle-paint-tin",
+      "progress": 47,
+      "lane": 3
+    },
+    {
+      "id": "obstacle-toolbox",
+      "progress": 152,
+      "lane": 2
+    },
+    {
+      "id": "obstacle-wood-block",
+      "progress": 88,
+      "lane": 0
+    }
+  ],
+  "powerUpOpportunities": [
+    {
+      "id": "pickup-back-straight",
+      "progress": 66,
+      "allowedEffects": [
+        "boost",
+        "hazard",
+        "shield"
+      ]
+    },
+    {
+      "id": "pickup-flyover",
+      "progress": 232,
+      "allowedEffects": [
+        "boost",
+        "shield"
+      ]
+    },
+    {
+      "id": "pickup-start",
+      "progress": 18,
+      "allowedEffects": [
+        "boost",
+        "shield"
+      ]
+    },
+    {
+      "id": "pickup-underpass",
+      "progress": 108,
+      "allowedEffects": [
+        "hazard",
+        "shield"
+      ]
+    }
+  ],
+  "hazardPlacementLocations": [
+    {
+      "id": "hazard-bench-end",
+      "progress": 158,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hazard-descent",
+      "progress": 262,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hazard-far-end",
+      "progress": 35,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hazard-underpass",
+      "progress": 98,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "presentation": {
+    "path": [
+      {
+        "progress": 0,
+        "x": -18,
+        "y": 2.9,
+        "z": 16.4,
+        "bank": -0.0297
+      },
+      {
+        "progress": 7,
+        "x": -23.218,
+        "y": 2.906,
+        "z": 16.729,
+        "bank": -0.1371
+      },
+      {
+        "progress": 14,
+        "x": -28.16,
+        "y": 2.722,
+        "z": 15.222,
+        "bank": -0.1822
+      },
+      {
+        "progress": 21,
+        "x": -31.666,
+        "y": 2.304,
+        "z": 11.456,
+        "bank": -0.1772
+      },
+      {
+        "progress": 28,
+        "x": -33.078,
+        "y": 1.964,
+        "z": 6.448,
+        "bank": -0.0949
+      },
+      {
+        "progress": 35,
+        "x": -33.136,
+        "y": 1.682,
+        "z": 1.236,
+        "bank": -0.0901
+      },
+      {
+        "progress": 42,
+        "x": -31.909,
+        "y": 1.42,
+        "z": -3.832,
+        "bank": -0.0951
+      },
+      {
+        "progress": 49,
+        "x": -29.418,
+        "y": 1.147,
+        "z": -8.41,
+        "bank": -0.0998
+      },
+      {
+        "progress": 56,
+        "x": -25.778,
+        "y": 0.938,
+        "z": -12.146,
+        "bank": -0.0954
+      },
+      {
+        "progress": 63,
+        "x": -21.302,
+        "y": 0.741,
+        "z": -14.825,
+        "bank": -0.0873
+      },
+      {
+        "progress": 70,
+        "x": -16.327,
+        "y": 0.521,
+        "z": -16.372,
+        "bank": -0.1643
+      },
+      {
+        "progress": 77,
+        "x": -11.221,
+        "y": 0.319,
+        "z": -15.546,
+        "bank": -0.1814
+      },
+      {
+        "progress": 84,
+        "x": -7.158,
+        "y": 0.194,
+        "z": -12.318,
+        "bank": -0.11
+      },
+      {
+        "progress": 91,
+        "x": -4.316,
+        "y": 0.124,
+        "z": -7.931,
+        "bank": -0.0406
+      },
+      {
+        "progress": 98,
+        "x": -1.842,
+        "y": 0.087,
+        "z": -3.318,
+        "bank": -0.0001
+      },
+      {
+        "progress": 105,
+        "x": 0.732,
+        "y": 0.123,
+        "z": 1.239,
+        "bank": 0.0076
+      },
+      {
+        "progress": 112,
+        "x": 3.349,
+        "y": 0.294,
+        "z": 5.769,
+        "bank": 0.0319
+      },
+      {
+        "progress": 119,
+        "x": 6.334,
+        "y": 0.541,
+        "z": 10.055,
+        "bank": 0.0669
+      },
+      {
+        "progress": 126,
+        "x": 10.039,
+        "y": 0.858,
+        "z": 13.723,
+        "bank": 0.1081
+      },
+      {
+        "progress": 133,
+        "x": 14.636,
+        "y": 1.154,
+        "z": 16.162,
+        "bank": 0.1052
+      },
+      {
+        "progress": 140,
+        "x": 19.746,
+        "y": 1.39,
+        "z": 17.188,
+        "bank": 0.1005
+      },
+      {
+        "progress": 147,
+        "x": 24.945,
+        "y": 1.522,
+        "z": 16.763,
+        "bank": 0.1398
+      },
+      {
+        "progress": 154,
+        "x": 29.581,
+        "y": 1.664,
+        "z": 14.46,
+        "bank": 0.1587
+      },
+      {
+        "progress": 161,
+        "x": 32.864,
+        "y": 1.852,
+        "z": 10.418,
+        "bank": 0.1241
+      },
+      {
+        "progress": 168,
+        "x": 34.617,
+        "y": 2.079,
+        "z": 5.518,
+        "bank": 0.0996
+      },
+      {
+        "progress": 175,
+        "x": 34.98,
+        "y": 2.337,
+        "z": 0.314,
+        "bank": 0.0834
+      },
+      {
+        "progress": 182,
+        "x": 34.139,
+        "y": 2.627,
+        "z": -4.833,
+        "bank": 0.0949
+      },
+      {
+        "progress": 189,
+        "x": 32.011,
+        "y": 2.967,
+        "z": -9.583,
+        "bank": 0.1085
+      },
+      {
+        "progress": 196,
+        "x": 28.59,
+        "y": 3.357,
+        "z": -13.496,
+        "bank": 0.1247
+      },
+      {
+        "progress": 203,
+        "x": 24.059,
+        "y": 3.846,
+        "z": -16.025,
+        "bank": 0.1301
+      },
+      {
+        "progress": 210,
+        "x": 18.948,
+        "y": 4.364,
+        "z": -16.812,
+        "bank": 0.1332
+      },
+      {
+        "progress": 217,
+        "x": 13.867,
+        "y": 4.849,
+        "z": -15.736,
+        "bank": 0.1257
+      },
+      {
+        "progress": 224,
+        "x": 9.444,
+        "y": 5.245,
+        "z": -13.033,
+        "bank": 0.1084
+      },
+      {
+        "progress": 231,
+        "x": 5.956,
+        "y": 5.503,
+        "z": -9.145,
+        "bank": 0.0458
+      },
+      {
+        "progress": 238,
+        "x": 3.007,
+        "y": 5.675,
+        "z": -4.828,
+        "bank": 0.0167
+      },
+      {
+        "progress": 245,
+        "x": 0.248,
+        "y": 5.709,
+        "z": -0.38,
+        "bank": -0.0028
+      },
+      {
+        "progress": 252,
+        "x": -2.569,
+        "y": 5.508,
+        "z": 4.027,
+        "bank": -0.007
+      },
+      {
+        "progress": 259,
+        "x": -5.461,
+        "y": 5.142,
+        "z": 8.374,
+        "bank": -0.0401
+      },
+      {
+        "progress": 266,
+        "x": -8.832,
+        "y": 4.526,
+        "z": 12.323,
+        "bank": -0.0779
+      },
+      {
+        "progress": 273,
+        "x": -12.951,
+        "y": 3.66,
+        "z": 15.394,
+        "bank": -0.1854
+      }
+    ]
+  },
+  "corners": [
+    {
+      "id": "corner-01",
+      "fromProgress": 5.423,
+      "toProgress": 26.474,
+      "laneSpeedLimits": [
+        10.033,
+        10.693,
+        11.502,
+        12.528
+      ]
+    },
+    {
+      "id": "corner-02",
+      "fromProgress": 65.469,
+      "toProgress": 84.634,
+      "laneSpeedLimits": [
+        10.247,
+        10.899,
+        11.694,
+        12.692
+      ]
+    },
+    {
+      "id": "corner-03",
+      "fromProgress": 124.874,
+      "toProgress": 167.81,
+      "laneSpeedLimits": [
+        13.484,
+        12.596,
+        11.863,
+        11.245
+      ]
+    },
+    {
+      "id": "corner-04",
+      "fromProgress": 184.761,
+      "toProgress": 224.479,
+      "laneSpeedLimits": [
+        14.476,
+        13.69,
+        13.019,
+        12.438
+      ]
+    },
+    {
+      "id": "corner-05",
+      "fromProgress": 268.049,
+      "toProgress": 277.028,
+      "laneSpeedLimits": [
+        10.601,
+        11.241,
+        12.012,
+        12.968
+      ]
+    }
+  ]
+}

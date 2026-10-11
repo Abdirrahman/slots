@@ -1,5 +1,7 @@
 # Slots Game Design
 
+> Current playable rules: [Racing mechanics milestone](MECHANICS_MILESTONE.md). Its Club, Party and Time Trial contracts supersede the automatic-driving, checkpoint-recovery and lap-reset pickup behavior described in the earlier milestone sections below.
+
 Status: accepted on 2026-07-30
 
 This document is the canonical product and gameplay specification for Slots. Domain terminology is defined in [`CONTEXT.md`](../CONTEXT.md); architectural rationale is recorded in [`docs/adr`](./adr/).
@@ -44,11 +46,65 @@ The project does not initially provide:
 - Every track has exactly four permanent lanes.
 - A key press begins one adjacent-lane change.
 - A successful lane change takes approximately 0.2 seconds, adjusted by the car's lane-change stat.
-- Another lane change may begin immediately after the current transition ends.
+  At the 30-tick simulation rate that is **six ticks**, which is the number the car profile
+  carries; state it in ticks alongside the seconds so the two cannot drift apart again.
+- Another lane change may begin immediately after the current transition ends, including one
+  the racer pressed slightly early — see [Lane input responsiveness](#lane-input-responsiveness).
 - Lane changing is disabled during crashes, respawns, jumps, loops, and other special track transitions.
 - Boost cannot be spent while crashed, ghosted, already boosting, or without a charge.
 - An outward input from an outside lane is ignored.
 - Cars cannot leave the track.
+
+### Lane input responsiveness
+
+> **Amendment 2026-08-23 (early lane presses are held, and lane movement is predicted locally).**
+> Two rules are added here. Nothing above is withdrawn: a press still begins one adjacent-lane
+> change, a change still takes about 0.2 seconds, and the server still decides every outcome.
+>
+> The reason. Lane changing is the only control a racer has, so the delay between the press and
+> the car moving *is* the game's feel. Two things were adding to it. Presses made during a
+> transition were discarded, so lining up a two-lane move meant waiting for the first change to
+> visibly finish before pressing again. And the client rendered no lane movement at all until an
+> authoritative snapshot carrying the transition arrived — measured at 70–128 ms of dead time on
+> a *local* server, before any real network latency.
+
+Lane changing is server-authoritative and deterministic. Two rules keep it responsive without
+moving any decision off the server:
+
+- **A lane edge pressed during a transition is held, not dropped.** The room keeps at most one
+  such edge and starts it on the first tick the car is free. The edge expires after one of that
+  car's own lane changes plus two ticks, so a press never fires a whole lane change after the
+  opening the racer was aiming at. A blocked return can outlast that window, which is intended:
+  after a bump the racer picks their line again.
+- **The client predicts its own lane movement and takes forward travel from authority.** A lane
+  transition is the racer's decision and the room advances it by a fixed fraction per tick, so
+  the client reproduces it exactly and reconciles against the next snapshot. Forward travel is
+  the track's decision — an obstacle, a hazard or a car ahead can cut it short — so it is
+  extrapolated only on a track carrying none of those, and interpolated from authority
+  otherwise. Predicting a lane change the server later blocks is self-correcting, because a
+  blocked change already renders as a partial move followed by a return.
+
+An unacknowledged predicted lane change is dropped after half a second. The room advances its
+processed-input sequence only for inputs it accepts, so a refused edge is never acknowledged and
+would otherwise leave the local car drawn part-way into a lane it never entered.
+
+Measured on the Workshop Bench against a local server: the rendered car begins moving 16–52 ms
+after the press (mean 28 ms, often within a single frame) where it previously could not move at
+all for 70–128 ms; and 6 of 6 double taps with both presses inside one frame complete both lane
+changes, which before this change completed only the first.
+
+### Authoritative lane input truth table
+
+| Scenario | Deterministic logical outcome |
+| --- | --- |
+| Lane edge while the Car is settled | It becomes the pending edge and starts a transition on the next tick. |
+| Lane edge while a transition is running | It is held as the one buffered edge and acknowledged. Acknowledgement is what stops the client predicting a change it cannot yet show. |
+| Second lane edge while one is already held | Rejected. At most one edge is ever held, so a burst of presses cannot queue a run of lane changes. |
+| Held edge and the Car becomes free inside the window | It is promoted at that tick's input assembly, from the same pre-tick Car state as every other input, and starts a transition that tick. |
+| Held edge and the window closes first | It is discarded and never fires. A blocked return, or a crash and its recovery, both outlast the window. |
+| Held edge when control changes between human and Bot | Discarded with the pending edge (Milestone 6 rule 7). |
+| Held edge on a Crashed, finished or DNF Car | Never promoted; it expires on the window like any other. |
+| Held outward edge from an outside Lane | Promoted normally and then ignored by the lane rules, exactly as a directly pressed one is. |
 
 ## Cars and starting positions
 
@@ -94,7 +150,7 @@ Collision rules use cyclic Track progress and logical Lane occupancy, never rend
 | Rear contact in one settled Lane | The nearest trailing Car is constrained one minimum gap behind the leading Car; only the trailing Car loses speed. |
 | Contact enters / persists | Entry emits one Ordinary collision and applies one speed loss. Persistent contact maintains the gap without another loss; opening a gap or leaving the settled Lane clears contact. |
 | Car changes into an occupied destination path | The change is Blocked before logical overlap and enters an authoritative return to its source Lane; forward speeds are unchanged. |
-| Blocked return | Return starts from the reached transition progress, occupies both paths, and must finish before another Lane change can begin. |
+| Blocked return | Return starts from the reached transition progress, occupies both paths, and must finish before another Lane change can begin. A buffered Lane edge waits for it like any other transition, and is discarded if the return outlasts the buffer window. |
 | Two Cars exchange Lanes simultaneously | Both claims are Blocked and both return. |
 | Two Cars claim one destination Lane | If their longitudinal paths conflict, every conflicting claim is Blocked; separated claims may proceed. |
 | Same-tick conflicting claims | Claims are evaluated as one batch from the pre-resolution state; no claim wins through processing order. |
@@ -359,6 +415,11 @@ Changing an authored track's version invalidates local best times for that track
 - Open the camera's field of view with speed, bounded, so boost is felt as well as read; pin it
   at rest under `prefers-reduced-motion`. Camera shake scales with the same amount and is small
   enough that the four lanes stay readable at boost top speed.
+- Ease the lateral movement of a lane change rather than sliding the car across at a constant
+  rate, so a change reads as a car committing to a line instead of a part being moved by a
+  machine. Easing is presentation only: it changes where the car is drawn during a transition,
+  never the authoritative transition progress that lane occupancy, contact, and corner limits
+  are all resolved from.
 - Drive tail lamps from car state: dim at a steady speed, bright while losing speed, and lifted
   while de-slot pressure is building, so a racer can read the car in front. Lamps are never at
   full strength by default.
@@ -418,7 +479,7 @@ The canonical persistent participation record is a **Race seat**. A Player is Ro
 
 ## Technology and performance constraints
 
-Architecture decisions are detailed in ADRs 0001–0007.
+Architecture decisions are detailed in ADRs 0001–0008.
 
 - Use TypeScript, Vite, Three.js, WebGL2, native HTML/CSS UI, Web Audio, and WebSockets.
 - Keep the authoritative race simulation independent of rendering.

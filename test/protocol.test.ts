@@ -109,7 +109,7 @@ describe("parseClientCommand", () => {
       { ...base, type: "teleport" },
       { protocolVersion: 1, type: "start_race" },
       { ...base, type: "start_race", extra: true },
-      { ...base, type: "input", raceId: "race-1", throttle: 1 },
+      { ...base, type: "input", raceId: "race-1", throttle: 2 },
       { ...base, type: "input", raceId: "race-1", progress: 99 },
       { ...base, type: "input", raceId: "race-1", speed: 99 },
       { ...base, type: "input", raceId: "race-1", finishedAtSeconds: 0 },

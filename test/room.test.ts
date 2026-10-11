@@ -8,7 +8,7 @@ import {
   SNAPSHOT_INTERVAL_TICKS,
 } from "../src/multiplayer-config";
 import type { CarProfile, Track } from "../src/race";
-import { Room } from "../src/room";
+import { Room, laneInputBufferTicks } from "../src/room";
 
 const fastTrack: Track = {
   id: "room-test",
@@ -115,19 +115,160 @@ describe("Room authoritative input and ticks", () => {
 
     expect(room.acceptInput("host", { raceId, seq: 2, laneChange: 1 })).toBe(true);
     expect(room.acceptInput("host", { raceId, seq: 1, laneChange: -1 })).toBe(false);
-    expect(room.acceptInput("host", { raceId, seq: 3, laneChange: -1 })).toBe(false);
+    // The second edge is held rather than dropped, but only one is ever held.
+    expect(room.acceptInput("host", { raceId, seq: 3, laneChange: -1 })).toBe(true);
+    expect(room.acceptInput("host", { raceId, seq: 4, laneChange: -1 })).toBe(false);
 
     room.advance();
     const first = room.race!.cars.find((car) => car.id === "host")!;
     expect(first.speed).toBeGreaterThan(0);
     expect(first.laneTransition).toMatchObject({ from: 0, to: 1 });
-    expect(room.snapshot("host").lastProcessedInputSequence).toBe(2);
+    // A held edge is acknowledged, so the client stops predicting a change it cannot see yet;
+    // the fourth is refused, because only one edge is ever held.
+    expect(room.snapshot("host").lastProcessedInputSequence).toBe(3);
 
     room.advance();
     const second = room.race!.cars.find((car) => car.id === "host")!;
     expect(second.speed).toBeGreaterThan(first.speed);
     expect(second.lane).toBe(0);
     expect(second.laneTransition).toBeNull();
+  });
+
+  /**
+   * A Room whose Car has empty Lanes to move into and neither finishes nor collides inside the
+   * window these tests measure, so the only thing moving its Lane state is the input under
+   * test. Race seats take Lanes in sorted id order, so the Host sorting last puts it in Lane 1
+   * with Lanes 2 and 3 free.
+   */
+  function laneRoom(laneChangeDurationTicks: number): { room: Room; raceId: string } {
+    const room = new Room({
+      code: "AB12", hostId: "zhost", hostName: "Host",
+      track: { ...fastTrack, length: 4_000 },
+      carProfile: { ...fastProfile, accelerationPerSecondSquared: 1, topSpeedPerSecond: 1, laneChangeDurationTicks },
+      configuration: { laps: 1 },
+      createRaceId: () => "race-1",
+    });
+    room.join("aguest", "Guest");
+    const raceId = room.startRace("zhost")!;
+    advance(room, COUNTDOWN_TICKS);
+    expect(room.race!.cars.find((entry) => entry.id === "zhost")!.lane).toBe(1);
+    return { room, raceId };
+  }
+
+  const hostCar = (room: Room) => room.race!.cars.find((entry) => entry.id === "zhost")!;
+
+  test("holds a Lane edge pressed during a transition and starts it when the Car is free", () => {
+    const { room, raceId } = laneRoom(4);
+
+    expect(room.acceptInput("zhost", { raceId, seq: 1, laneChange: 1 })).toBe(true);
+    room.advance();
+    expect(hostCar(room).laneTransition).toMatchObject({ from: 1, to: 2, phase: "changing" });
+
+    // Pressed one tick into a four-tick change: too early for the Room to act on, and exactly
+    // the press that used to be dropped.
+    expect(room.acceptInput("zhost", { raceId, seq: 2, laneChange: 1 })).toBe(true);
+    advance(room, 2);
+    expect(hostCar(room).laneTransition).toMatchObject({ from: 1, to: 2 });
+    expect(hostCar(room).lane).toBe(1);
+
+    // The held edge starts on the first tick after the first change settles, and no later.
+    room.advance();
+    expect(hostCar(room).lane).toBe(2);
+    expect(hostCar(room).laneTransition).toBeNull();
+    room.advance();
+    expect(hostCar(room).laneTransition).toMatchObject({ from: 2, to: 3, phase: "changing" });
+  });
+
+  test("holds an edge pressed on the very tick a transition starts", () => {
+    // The tightest case the window has to cover: the edge waits the transition's full
+    // duration, which is exactly where a window of one Lane change used to expire it.
+    const { room, raceId } = laneRoom(6);
+    expect(room.acceptInput("zhost", { raceId, seq: 1, laneChange: 1 })).toBe(true);
+    room.advance();
+    expect(hostCar(room).laneTransition).toMatchObject({ from: 1, to: 2, progress: 1 / 6 });
+    expect(room.acceptInput("zhost", { raceId, seq: 2, laneChange: 1 })).toBe(true);
+
+    // Six ticks finish the change and a seventh is the first assembly that sees the Car free.
+    advance(room, 6);
+    expect(hostCar(room).lane).toBe(2);
+    expect(hostCar(room).laneTransition).toBeNull();
+    room.advance();
+    expect(hostCar(room).laneTransition).toMatchObject({ from: 2, to: 3, phase: "changing" });
+  });
+
+  test("holds the second half of the fastest possible double tap", () => {
+    // Both presses land in one tick gap, before any tick has consumed the first. That stamps
+    // the held edge one tick before the transition it waits on is even created, which is the
+    // longest legitimate wait the buffer window has to cover.
+    const { room, raceId } = laneRoom(6);
+    expect(room.acceptInput("zhost", { raceId, seq: 1, laneChange: 1 })).toBe(true);
+    expect(room.acceptInput("zhost", { raceId, seq: 2, laneChange: 1 })).toBe(true);
+
+    // Seven ticks settle the first change; the eighth is the first assembly that sees the Car
+    // free, and it is exactly the tick the held edge would have expired on before the window
+    // was made inclusive.
+    advance(room, 7);
+    expect(hostCar(room).lane).toBe(2);
+    expect(hostCar(room).laneTransition).toBeNull();
+    room.advance();
+    expect(hostCar(room).laneTransition).toMatchObject({ from: 2, to: 3, phase: "changing" });
+    advance(room, 6);
+    expect(hostCar(room).lane).toBe(3);
+  });
+
+  test("drops a held Lane edge when the Car cannot take it before the window closes", () => {
+    // Crash recovery is far longer than the window, so a press made before the Crash must not
+    // steer the Car the moment it respawns.
+    const room = new Room({
+      code: "AB12", hostId: "zhost", hostName: "Host",
+      track: {
+        ...fastTrack,
+        length: 4_000,
+        checkpoints: [{ id: "one", progress: 1_000 }],
+        fixedObstacles: [{ id: "block-1", progress: 3, lane: 1 }, { id: "block-2", progress: 3, lane: 2 }],
+      },
+      carProfile: { ...fastProfile, accelerationPerSecondSquared: 1_800, topSpeedPerSecond: 60, laneChangeDurationTicks: 6 },
+      configuration: { laps: 1 },
+      createRaceId: () => "race-1",
+    });
+    room.join("aguest", "Guest");
+    const raceId = room.startRace("zhost")!;
+    advance(room, COUNTDOWN_TICKS);
+    expect(hostCar(room).lane).toBe(1);
+
+    expect(room.acceptInput("zhost", { raceId, seq: 1, laneChange: 1 })).toBe(true);
+    room.advance();
+    expect(room.acceptInput("zhost", { raceId, seq: 2, laneChange: 1 })).toBe(true);
+
+    // The Crash lands well inside the six-tick change, so the edge is still held when it hits.
+    advance(room, 4);
+    expect(hostCar(room).crashRecoveryTicksRemaining).toBeGreaterThan(0);
+
+    // Out the far side of the recovery, holding the input lease so the seat stays human and
+    // the only thing that could steer the Car is the edge pressed before the Crash.
+    let seq = 3;
+    for (let batch = 0; batch < 13; batch += 1) {
+      expect(room.acceptInput("zhost", { raceId, seq: seq++ })).toBe(true);
+      advance(room, 10);
+    }
+    expect(room.snapshot("zhost").players.find((player) => player.id === "zhost")!.controller).toBe("human");
+    expect(hostCar(room).crashRecoveryTicksRemaining).toBe(0);
+    expect(hostCar(room).laneTransition).toBeNull();
+  });
+
+  test("holds at most one Lane edge and clears it when control changes to a Bot", () => {
+    const { room, raceId } = laneRoom(4);
+
+    expect(room.acceptInput("zhost", { raceId, seq: 1, laneChange: 1 })).toBe(true);
+    room.advance();
+    expect(room.acceptInput("zhost", { raceId, seq: 2, laneChange: 1 })).toBe(true);
+    expect(room.acceptInput("zhost", { raceId, seq: 3, laneChange: -1 })).toBe(false);
+
+    // Milestone 6 rule 7: every controller transition clears queued Lane edges, so the held
+    // edge cannot surface under the Bot that took over.
+    room.disconnect("zhost");
+    room.advance();
+    expect(room.snapshot("zhost").players.find((player) => player.id === "zhost")!.controller).toBe("bot");
   });
 
   test("rejects Lane intent during Crash recovery while accepting heartbeat liveness", () => {

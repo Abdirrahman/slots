@@ -1,4 +1,5 @@
 import rawWorkshopTrack from "./workshop-track.json";
+import rawDiningTrack from "./dining-track.json";
 import type {
   Checkpoint,
   FixedObstacle,
@@ -65,7 +66,8 @@ export function validateAuthoredTrack(value: unknown): AuthoredTrackContent {
 
   if (!Array.isArray(value.powerUpOpportunities)) fail("Authored Track pickup opportunities are invalid");
   validateCanonical(value.powerUpOpportunities, (opportunity) => {
-    authoredPoint(opportunity, ["id", "progress", "allowedEffects"], length, ids, "Pickup opportunity");
+    authoredPoint(opportunity, ["id", "progress", "allowedEffects", ...(opportunity.spawnRadius === undefined ? [] : ["spawnRadius"])], length, ids, "Pickup opportunity");
+    if (opportunity.spawnRadius !== undefined && (!positiveFinite(opportunity.spawnRadius) || opportunity.spawnRadius > length / 4)) fail("Pickup spawn radius is invalid");
     if (!Array.isArray(opportunity.allowedEffects) || opportunity.allowedEffects.length === 0
       || new Set(opportunity.allowedEffects).size !== opportunity.allowedEffects.length
       || !opportunity.allowedEffects.every(powerUpEffect)) fail("Pickup allowed effects are invalid");
@@ -126,6 +128,24 @@ export const WORKSHOP_CONTENT = validateAuthoredTrack(rawWorkshopTrack);
 export const WORKSHOP_TRACK = WORKSHOP_CONTENT.track;
 export const WORKSHOP_PATH = WORKSHOP_CONTENT.path;
 export const WORKSHOP_TRACK_IDENTITY = `${WORKSHOP_TRACK.id}@${WORKSHOP_TRACK.version}`;
+export const DINING_CONTENT = validateAuthoredTrack(rawDiningTrack);
+export const DINING_TRACK = DINING_CONTENT.track;
+export const DEFAULT_TRACK = DINING_TRACK;
+
+const AUTHORED_TRACKS = new Map([
+  [WORKSHOP_TRACK.id, WORKSHOP_CONTENT],
+  [DINING_TRACK.id, DINING_CONTENT],
+]);
+
+/** Unknown ids are synthetic test Tracks; known authored Tracks must match their baked geometry. */
+export function resolveAuthoredTrack(track: Pick<Track, "id" | "version" | "length">): AuthoredTrackContent | undefined {
+  const content = AUTHORED_TRACKS.get(track.id);
+  if (content === undefined) return undefined;
+  if (track.version !== content.track.version || track.length !== content.track.length) {
+    fail(`Authored Track identity mismatch: ${track.id}@${track.version ?? "unversioned"}`);
+  }
+  return content;
+}
 
 function authoredPoint(value: unknown, keys: readonly string[], length: number, ids: Set<string>, label: string): asserts value is Record<string, unknown> {
   if (!isObject(value) || !hasExactKeys(value, keys) || !stableId(value.id) || ids.has(value.id) || !progress(value.progress, length)) fail(`${label} is malformed or duplicated`);

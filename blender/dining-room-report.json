@@ -1,0 +1,58 @@
+{
+  "triangles": 96736,
+  "meshObjects": 65,
+  "materials": 30,
+  "minBendRadius": 12.51594,
+  "minimumNonadjacentCenterlineSeparation": 14.75966,
+  "nonadjacentArcExclusion": 16,
+  "roadEnvelopeWidth": 5.94,
+  "envelopeMargin": 1.2,
+  "centerlineWorldLength": 248.408439,
+  "trackProgressLength": 340.285533,
+  "worldUnitsPerProgress": 0.73,
+  "routeSamples": 2048,
+  "meshSamples": 1024,
+  "bounds": {
+    "x": [
+      -47.1284,
+      47.0634
+    ],
+    "y": [
+      0.4759,
+      6.4068
+    ],
+    "z": [
+      -25.2963,
+      25.3704
+    ]
+  },
+  "missingMaterials": [],
+  "unappliedScales": [],
+  "sceneryEnvelopeCollisions": [],
+  "sceneryClearanceSamples": 1024,
+  "sceneryCarHeightAllowance": 1.4,
+  "laneFormula": "legacy horizontal tangent + vertical bank, exact runtime formula",
+  "notes": [
+    "No crossings or jump gaps; east rise peaks at 6.41 world units.",
+    "Table underside at 17.1; north straight surface at 0.65\u20133, with eastern entrance reaching 6.",
+    "Gameplay obstacle list is empty; scenery bounds checked against 1,024 road cross sections, 17 width samples and 1.4 units of car headroom."
+  ],
+  "assetId": "dining-table-run",
+  "version": "1.0.0",
+  "sourceAxes": "Blender X=gameX,Y=-gameZ,Z=gameY",
+  "roadSurfaceNode": "track-surface",
+  "rootNode": "dining-room",
+  "startLights": [
+    "start-light-0",
+    "start-light-1",
+    "start-light-2"
+  ],
+  "routeSha256": "b22d9fa8335b1a174c1a518e44ca0e797a6f7d1264344e6887f3977d275602ed",
+  "outputs": {
+    "src/dining-track.json": 3953,
+    "public/assets/maps/dining-table-run.glb": 5191752,
+    "blender/source/dining-table-run.blend": 1442570,
+    "public/assets/cards/dining-table-run.png": 194722,
+    "public/assets/cards/dining-table-run-overview.png": 1329274
+  }
+}

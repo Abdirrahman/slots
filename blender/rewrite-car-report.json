@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "assetId": "r2-car-club",
+      "displayName": "Club 07",
+      "modelPath": "/assets/models/r2-car-club.glb",
+      "cardPath": "/assets/cards/r2-car-club.png",
+      "dimensionsGameXYZ": [
+        1.04,
+        0.8115,
+        2.295
+      ],
+      "triangleCount": 6052,
+      "forwardAxis": "+Z",
+      "wheelRadius": 0.23,
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "suggestedColliderGameXYZ": [
+        0.9776,
+        0.7141,
+        2.1573
+      ]
+    },
+    {
+      "assetId": "r2-car-muscle",
+      "displayName": "Hammer 22",
+      "modelPath": "/assets/models/r2-car-muscle.glb",
+      "cardPath": "/assets/cards/r2-car-muscle.png",
+      "dimensionsGameXYZ": [
+        1.04,
+        0.7315,
+        2.625
+      ],
+      "triangleCount": 6282,
+      "forwardAxis": "+Z",
+      "wheelRadius": 0.24,
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "suggestedColliderGameXYZ": [
+        0.9776,
+        0.6437,
+        2.4675
+      ]
+    },
+    {
+      "assetId": "r2-car-prototype",
+      "displayName": "Vector 64",
+      "modelPath": "/assets/models/r2-car-prototype.glb",
+      "cardPath": "/assets/cards/r2-car-prototype.png",
+      "dimensionsGameXYZ": [
+        1.04,
+        0.6675,
+        2.615
+      ],
+      "triangleCount": 6524,
+      "forwardAxis": "+Z",
+      "wheelRadius": 0.225,
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "suggestedColliderGameXYZ": [
+        0.9776,
+        0.5874,
+        2.4581
+      ]
+    },
+    {
+      "assetId": "r2-car-gt",
+      "displayName": "Prism 91",
+      "modelPath": "/assets/models/r2-car-gt.glb",
+      "cardPath": "/assets/cards/r2-car-gt.png",
+      "dimensionsGameXYZ": [
+        1.04,
+        0.7415,
+        2.575
+      ],
+      "triangleCount": 6488,
+      "forwardAxis": "+Z",
+      "wheelRadius": 0.235,
+      "wheelObjects": [
+        "wheel-front-left",
+        "wheel-front-right",
+        "wheel-rear-left",
+        "wheel-rear-right"
+      ],
+      "suggestedColliderGameXYZ": [
+        0.9776,
+        0.6525,
+        2.4205
+      ]
+    }
+  ]
+}

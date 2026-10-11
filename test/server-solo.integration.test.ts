@@ -233,3 +233,40 @@ describe("authoritative Solo Quick Race WebSocket flow", () => {
     expect(state(rematch).race!.cars).toHaveLength(4);
   });
 });
+
+test("manual Time Trial inputs and one-click voltage rematches survive the real websocket contract", async () => {
+  const server = createGameServer({ automaticTick: false, serveDirectory: null, track: { ...fastTrack, length: 120,
+    checkpoints: [{ id: "one", progress: 30 }, { id: "two", progress: 60 }, { id: "three", progress: 90 }] } });
+  servers.push(server);
+  const port = await server.listen(0);
+  const client = await connect(port);
+  client.send({ type: "create_solo_race", seq: 0, name: "Human", botCount: 0, botDifficulty: "normal",
+    configuration: { laps: 1, rules: "trial", assist: false, voltage: 3 } });
+  const identity = await client.next("identity");
+  const countdown = await client.next("snapshot");
+  const room = server.rooms.get(identity.roomCode as string)!;
+  const id = identity.localPlayerId as string;
+  const firstRaceId = room.raceId!;
+  server.advance(COUNTDOWN_TICKS + 30);
+  expect(room.race!.cars[0]!.speed).toBe(0);
+  expect(room.race!.powerUpOpportunities).toEqual([]);
+  let seq = 0;
+  const input = async (throttle: number, brake: boolean) => {
+    const sent = ++seq;
+    client.send({ type: "input", seq: sent, raceId: firstRaceId, throttle, brake });
+    await waitFor(() => room.snapshot(id).lastProcessedInputSequence === sent || undefined, "continuous drive input");
+  };
+  await input(1, false); server.advance(30);
+  expect(room.race!.cars[0]!.speed).toBeGreaterThan(0);
+  await input(0, true); server.advance(30);
+  expect(room.race!.cars[0]!.speed).toBe(0);
+  for (let batch = 0; batch < 30 && room.phase === "racing"; batch += 1) { await input(1, false); server.advance(30); }
+  const results = await client.snapshot(client.messages.indexOf(countdown), (snapshot) => snapshot.phase === "results");
+  expect(room.snapshot(id).players[0]!.bestTimeEligible).toBe(true);
+  client.send({ type: "rematch", seq: ++seq, raceId: firstRaceId,
+    configuration: { laps: 1, rules: "trial", assist: true, voltage: 6 } });
+  const rematch = await client.snapshot(client.messages.indexOf(results), (snapshot) => snapshot.phase === "countdown");
+  expect(rematch.raceId).not.toBe(firstRaceId);
+  expect(room.race!.configuration).toEqual({ laps: 1, rules: "trial", assist: true, voltage: 6 });
+  expect(room.race!.cars[0]!.profile.topSpeedPerSecond).toBe(18);
+});

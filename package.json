@@ -11,7 +11,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "assets:cars": "env -i HOME=$HOME PATH=/usr/bin:/bin /usr/bin/blender --background --factory-startup --python blender/scripts/build_assets.py && node tools/sync-car-assets.mjs",
-    "assets:track": "node tools/generate-track-path.mjs --write"
+    "assets:track": "node tools/generate-track-path.mjs --write",
+    "assets:rewrite-cars": "env -i HOME=$HOME PATH=/usr/bin:/bin ALSOFT_DRIVERS=null /usr/bin/blender --background --factory-startup -noaudio --python-exit-code 1 --python blender/scripts/build_rewrite_cars.py && node tools/sync-rewrite-cars.mjs",
+    "assets:dining": "env -i HOME=$HOME PATH=/usr/bin:/bin ALSOFT_DRIVERS=null /usr/bin/blender --background --factory-startup -noaudio --python-exit-code 1 --python blender/scripts/build_dining_room.py",
+    "assets:rewrite": "npm run assets:rewrite-cars && npm run assets:dining"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

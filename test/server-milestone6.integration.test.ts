@@ -283,7 +283,12 @@ describe("Milestone 6 resilient Room WebSocket integration", () => {
     expect((await rejectedOldToken.next("error")).code).toBe("command_rejected");
 
     const beforeCheckpoint = replacement.messages.length;
-    server.advance(24);
+    // Random player IDs change the Bot's reaction phase and starting Lane. Wait for the
+    // actual checkpoint handoff instead of assuming every traffic pattern takes 24 ticks.
+    const room = server.rooms.get(roomCode)!;
+    for (let ticks = 0; ticks < 120 && !room.snapshot(hostId).canControlRace; ticks += 1) server.advance();
+    expect(room.snapshot(hostId).canControlRace).toBe(true);
+    server.advance(2); // Deliver the next periodic snapshot after the handoff boundary.
     const reclaimed = await replacement.snapshot(beforeCheckpoint, (snapshot) => playerFrom(snapshot, hostId)?.controller === "human");
     expect(player(reclaimed, hostId)).toMatchObject({ reclaimPending: false, raceSeatId: hostId, connected: true });
     expect(state(reclaimed).canControlRace).toBe(true);

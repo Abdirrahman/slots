@@ -301,15 +301,24 @@ describe("logical Track pose mapping", () => {
     }
   });
 
-  test("uses authoritative Lane-transition progress", () => {
+  test("eases authoritative Lane-transition progress without changing its endpoints", () => {
     const car = createLocalRace().cars[0]!;
-    const transitioning = {
+    const at = (progress: number, phase: "changing" | "returning" = "changing") => lanePosition({
       ...car,
-      laneTransition: { from: 1 as const, to: 2 as const, progress: 0.25, phase: "changing" as const },
-    };
+      laneTransition: { from: 1 as const, to: 2 as const, progress, phase },
+    });
 
-    expect(lanePosition(transitioning)).toBe(1.25);
-    expect(sampleTrackPose(createLocalRace().track, 0, lanePosition(transitioning)).lanePosition).toBe(1.25);
+    // Easing is presentation only: it moves where the Car reads as being *during* a change,
+    // never which Lanes the change runs between, and never where it ends up.
+    expect(at(0)).toBe(1);
+    expect(at(1)).toBe(2);
+    expect(at(0.5)).toBe(1.5);
+    // Smoothstep: slow at the commitment, quickest across the middle of the Lane.
+    expect(at(0.25)).toBeCloseTo(1.15625, 10);
+    expect(at(0.75)).toBeCloseTo(1.84375, 10);
+    expect(at(0.25)).toBeLessThan(1.25);
+    expect(at(0.75)).toBeGreaterThan(1.75);
+    expect(sampleTrackPose(createLocalRace().track, 0, at(0.25)).lanePosition).toBeCloseTo(1.15625, 10);
   });
 
   test("samples authoritative blocked-return progress deterministically", () => {
@@ -318,8 +327,9 @@ describe("logical Track pose mapping", () => {
       ...car,
       laneTransition: { from: 1 as const, to: 2 as const, progress: 0.625, phase: "returning" as const },
     };
-    expect(lanePosition(returning)).toBe(1.625);
-    expect(lanePosition(structuredClone(returning))).toBe(1.625);
+    // A return runs the same curve, so the reading depends only on the authoritative progress.
+    expect(lanePosition(returning)).toBeCloseTo(1.68359375, 10);
+    expect(lanePosition(structuredClone(returning))).toBe(lanePosition(returning));
   });
 
   test("pose sampling and rendering interpolation do not mutate Race outcomes", () => {

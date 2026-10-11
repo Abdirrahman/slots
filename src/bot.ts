@@ -1,6 +1,7 @@
 import { BOT_LOOKAHEAD_PROGRESS, BOT_REACTION_TICKS } from "./multiplayer-config";
 import {
   PROVISIONAL_CONTACT,
+  automaticSpeedTarget,
   PROVISIONAL_DURATIONS,
   PROVISIONAL_POWER_UPS,
   PROVISIONAL_SLIPSTREAM,
@@ -72,18 +73,26 @@ export function botInput(
 ): CarInput {
   const car = state.cars.find((candidate) => candidate.id === carId);
   if (car === undefined || car.result !== "racing" || car.crashRecoveryTicksRemaining > 0) return {};
-  if ((state.tick + stablePhase(carId, profile.reactionTicks)) % profile.reactionTicks !== 0) return {};
+  const targetSpeed = automaticSpeedTarget(state.track, car, 0, state.configuration.rules !== undefined);
+  const drive: CarInput = state.configuration.rules === undefined ? {} : {
+    throttle: 1, brake: car.speed > targetSpeed * (profile === BOT_DIFFICULTY_PROFILES.easy ? 1.18 : profile === BOT_DIFFICULTY_PROFILES.hard ? 1.06 : 1.025),
+    ...(car.shieldCharges && car.shieldTicksRemaining === 0 && state.hazards.some((hazard) => hazard.lane === car.lane && isAhead(state, car.progress, hazard.progress, 16)) ? { useShield: true } : {}),
+    ...(car.mineCharges && isDefending(state, car) ? { useMine: true } : {}),
+    ...(car.boostTicksRemaining > 0 && car.bargeCooldown === 0 && state.cars.some((other) => other.id !== car.id && other.lane === car.lane && isAhead(state, car.progress, other.progress, 5)) ? { barge: true } : {}),
+  };
+  if ((state.tick + stablePhase(carId, profile.reactionTicks)) % profile.reactionTicks !== 0) return drive;
 
   const useBoost = wantsBoost(state, car, profile);
   // A Bot waits for an active transition to finish before asking for another Lane change,
   // but spending a charge is independent of what its Lane is doing.
-  if (car.laneTransition !== null) return useBoost ? { useBoost: true } : {};
+  if (car.laneTransition !== null) return { ...drive, ...(useBoost ? { useBoost: true } : {}) };
 
   const lanes = [car.lane, car.lane - 1, car.lane + 1]
     .filter((lane): lane is LaneIndex => lane >= 0 && lane <= 3)
     .sort((a, b) => scoreLane(state, car, b, profile) - scoreLane(state, car, a, profile) || a - b);
   const target = lanes[0] ?? car.lane;
   return {
+    ...drive,
     ...(target === car.lane ? {} : { laneChange: target > car.lane ? 1 : -1 }),
     ...(useBoost ? { useBoost: true } : {}),
   };
@@ -166,7 +175,7 @@ function scoreLane(state: RaceState, car: CarState, lane: LaneIndex, profile: Bo
   for (const opportunity of state.powerUpOpportunities) {
     if (opportunity.collected || opportunity.lane !== lane) continue;
     const authored = (state.track.powerUpOpportunities ?? []).find((candidate) => candidate.id === opportunity.id);
-    if (authored !== undefined && isAhead(state, car.progress, authored.progress, profile.lookaheadProgress)) score += profile.pickupWeight;
+    if (authored !== undefined && isAhead(state, car.progress, opportunity.progress ?? authored.progress, profile.lookaheadProgress)) score += profile.pickupWeight;
   }
   score += lineScore(state, car, lane, profile);
   // Defending is worth about what the racing line is worth, never enough to sit in front of

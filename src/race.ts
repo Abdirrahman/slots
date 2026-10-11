@@ -1,3 +1,4 @@
+import { cyclePickups } from "./pickups";
 export const TICKS_PER_SECOND = 30;
 export const TICK_SECONDS = 1 / TICKS_PER_SECOND;
 
@@ -16,14 +17,16 @@ export interface PowerUpOpportunity {
   readonly id: string;
   readonly progress: number;
   readonly allowedEffects: readonly PowerUpEffect[];
+  /** Half-width of an authored safe spawn zone. */
+  readonly spawnRadius?: number;
 }
 /**
  * A stretch of Track that punishes carrying too much speed, authored per Lane.
  *
  * This is simulation data, not presentation: the authoritative rules read these numbers and
- * never the path's height or bank (ADR 0006). Inner Lanes carry the higher limit because a
- * Car in the inside Lane of a turn sweeps the smaller radius at the same Track progress, so
- * the inside line is the fast line and the outside line is the safe one.
+ * never the path's height or bank (ADR 0006). These original progress-speed limits also
+ * encode relative lane length. Club/Party/Trial use their normalized ratios for travel,
+ * and reverse their order for physical grip limits: shorter inside lines need more braking.
  */
 export interface TrackCorner {
   readonly id: string;
@@ -52,11 +55,16 @@ export interface Track {
 export interface CarProfile {
   readonly accelerationPerSecondSquared: number;
   readonly topSpeedPerSecond: number;
-  /** Rate the automatic throttle lifts at, used to reach a corner's limit before entering it. */
+  /** Braking deceleration shared by human controls, assist and bots. */
   readonly brakingPerSecondSquared: number;
   readonly laneChangeDurationTicks: number;
 }
-export interface RaceConfiguration { readonly laps: number }
+export interface RaceConfiguration {
+  readonly laps: number;
+  readonly rules?: "club" | "party" | "trial";
+  readonly assist?: boolean;
+  readonly voltage?: 3 | 6 | 9;
+}
 export interface LaneTransition {
   readonly from: LaneIndex;
   readonly to: LaneIndex;
@@ -88,12 +96,22 @@ export interface CarState {
   /** True while a bounded slipstream bonus is being granted by a Car ahead. */
   readonly drafting: boolean;
   readonly respawnProgress: number;
+  readonly shieldCharges?: number;
+  readonly mineCharges?: number;
+  readonly travelled?: number;
+  readonly lastPickupTravel?: number;
+  readonly lastPickupTick?: number;
+  readonly bargeTicks?: number;
+  readonly bargeCooldown?: number;
 }
 export interface PowerUpOpportunityState {
   readonly id: string;
   readonly lane: LaneIndex;
   readonly effect: PowerUpEffect;
   readonly collected: boolean;
+  readonly progress?: number;
+  readonly phase?: "cooldown" | "warning" | "active";
+  readonly ticksRemaining?: number;
 }
 export interface HazardState {
   readonly id: string;
@@ -120,6 +138,11 @@ export interface CarInput {
   readonly laneChange?: LaneChangeDirection;
   /** Spend one Boost charge on this tick. */
   readonly useBoost?: boolean;
+  readonly throttle?: number;
+  readonly brake?: boolean;
+  readonly useShield?: boolean;
+  readonly useMine?: boolean;
+  readonly barge?: boolean;
 }
 export type RaceInputs = Readonly<Record<string, CarInput | undefined>>;
 
@@ -166,7 +189,10 @@ export const PROVISIONAL_CAR_PROFILE: CarProfile = Object.freeze({
   accelerationPerSecondSquared: 9,
   topSpeedPerSecond: 15,
   brakingPerSecondSquared: 14,
-  laneChangeDurationTicks: 12,
+  // Six ticks is the 0.2 s the design document specifies. It had drifted to twelve, which is
+  // 0.4 s: long enough that a Lane change read as the Car being steered rather than snapped
+  // across, and long enough to swallow the next press. See "Controls and movement".
+  laneChangeDurationTicks: 6,
 });
 export const PROVISIONAL_CONTACT = Object.freeze({
   minimumLongitudinalGap: 2,
@@ -295,12 +321,19 @@ export function createRace(options: CreateRaceOptions): RaceState {
       deslotPressure: 0,
       drafting: false,
       respawnProgress: track.startFinish,
+      ...(options.configuration.rules === undefined ? {} : {
+        shieldCharges: 0, mineCharges: 0, travelled: 0, lastPickupTravel: -track.length,
+        lastPickupTick: -300, bargeTicks: 0, bargeCooldown: 0,
+      }),
     };
   }).sort(compareCarIds);
 
   return {
     tick: 0, status: "racing", track, configuration: options.configuration, cars,
-    seed, randomState, powerUpLap: 0, powerUpOpportunities: rolled.opportunities,
+    seed, randomState, powerUpLap: 0, powerUpOpportunities: options.configuration.rules === "trial" ? []
+      : options.configuration.rules === undefined ? rolled.opportunities
+      : rolled.opportunities.map((opportunity, index) => ({ ...opportunity, collected: true,
+        progress: track.powerUpOpportunities![index]!.progress, phase: "cooldown" as const, ticksRemaining: 30 + index * 30 })),
     hazards: [], nextHazardSequence: 0,
   };
 }
@@ -320,6 +353,12 @@ interface CarProposal {
   boostCharges: number;
   deslotPressure: number;
   drafting: boolean;
+  shieldCharges: number;
+  mineCharges: number;
+  lastPickupTravel: number;
+  lastPickupTick: number;
+  bargeTicks: number;
+  bargeCooldown: number;
   activatedBoost: boolean;
   crashedThisTick: boolean;
 }
@@ -347,7 +386,21 @@ export function advanceRace(state: RaceState, inputs: RaceInputs): { readonly st
   const laneResolved = resolveLaneClaims(state, proposals, events);
   resolveTransitionSeparation(state.track.length, laneResolved);
 
-  const interactionResult = resolveInteractions(state, laneResolved, hazards, events);
+  // A held mine is spent only if a safe, nearby, trailing placement exists.
+  let itemRandom = state.randomState;
+  let itemSequence = state.nextHazardSequence;
+  for (const motion of laneResolved) {
+    if (!isInteractive(motion) || isGhost(motion) || !inputs[motion.car.id]?.useMine || motion.mineCharges === 0) continue;
+    const placed = placeHazard(state, motion.car.progress, 0, laneResolved, hazards, itemRandom, itemSequence);
+    itemRandom = placed.randomState;
+    if (placed.hazard === null) continue;
+    motion.mineCharges -= 1;
+    hazards.push(placed.hazard);
+    itemSequence += 1;
+    events.push({ type: "hazard_placed", carId: motion.car.id, hazardId: placed.hazard.id,
+      locationId: placed.hazard.locationId, lane: placed.hazard.lane, tick: state.tick, timeSeconds: state.tick * TICK_SECONDS });
+  }
+  const interactionResult = resolveInteractions({ ...state, randomState: itemRandom, nextHazardSequence: itemSequence }, laneResolved, hazards, events);
   hazards = interactionResult.hazards;
   resolveLongitudinalContact(state, laneResolved, events);
   let cars = laneResolved.map((motion) => commitCar(state, motion, events)).sort(compareCarIds);
@@ -357,11 +410,16 @@ export function advanceRace(state: RaceState, inputs: RaceInputs): { readonly st
   let powerUpLap = state.powerUpLap;
   let powerUpOpportunities = interactionResult.opportunities;
   const reachedLap = cars.reduce((maximum, car) => Math.max(maximum, car.completedLaps), powerUpLap);
-  while (powerUpLap < reachedLap) {
+  while (state.configuration.rules === undefined && powerUpLap < reachedLap) {
     const rolled = rollOpportunities(state.track, randomState);
     randomState = rolled.randomState;
     powerUpOpportunities = rolled.opportunities;
     powerUpLap += 1;
+  }
+  if (state.configuration.rules !== undefined && state.configuration.rules !== "trial") {
+    const cycled = cyclePickups({ ...state, cars, hazards, powerUpOpportunities, randomState });
+    powerUpOpportunities = cycled.opportunities;
+    randomState = cycled.randomState;
   }
   const status = cars.every((car) => car.result !== "racing") ? "finished" : "racing";
   events.sort(compareEvents);
@@ -387,7 +445,11 @@ export function finishRaceWithDnfs(state: RaceState): RaceState {
 }
 
 function proposeCar(race: RaceState, car: CarState, input: CarInput | undefined, slipstream: number): CarProposal {
-  const shieldTicksRemaining = Math.max(0, car.shieldTicksRemaining - 1);
+  let shieldTicksRemaining = Math.max(0, car.shieldTicksRemaining - 1);
+  let shieldCharges = car.shieldCharges ?? 0;
+  const mineCharges = car.mineCharges ?? 0;
+  const bargeCooldown = Math.max(0, (car.bargeCooldown ?? 0) - 1);
+  let bargeTicks = Math.max(0, (car.bargeTicks ?? 0) - 1);
   let boostTicksRemaining = Math.max(0, car.boostTicksRemaining - 1);
   let boostCharges = car.boostCharges;
   const idle = car.result !== "racing" || car.crashRecoveryTicksRemaining > 0;
@@ -399,9 +461,17 @@ function proposeCar(race: RaceState, car: CarState, input: CarInput | undefined,
     boostCharges -= 1;
     boostTicksRemaining = PROVISIONAL_DURATIONS.boostTicks;
   }
+  if (!idle && !car.ghost && input?.useShield && shieldCharges > 0 && shieldTicksRemaining === 0) {
+    shieldCharges -= 1;
+    shieldTicksRemaining = PROVISIONAL_DURATIONS.shieldTicks;
+  }
+  const activatedBarge = !idle && !car.ghost && input?.barge === true && boostTicksRemaining > 0 && bargeCooldown === 0;
+  if (activatedBarge) bargeTicks = 12;
+  const inventory = { shieldCharges, mineCharges, lastPickupTravel: car.lastPickupTravel ?? -race.track.length,
+    lastPickupTick: car.lastPickupTick ?? -300, bargeTicks, bargeCooldown: activatedBarge ? 90 : bargeCooldown };
   if (idle) {
     return {
-      car, speed: 0, distance: 0, lane: car.lane, transition: null, contact: null,
+      ...inventory, car, speed: 0, distance: 0, lane: car.lane, transition: null, contact: null,
       crashRecoveryTicksRemaining: Math.max(0, car.crashRecoveryTicksRemaining - 1),
       ghost: car.ghost,
       ghostMinimumTicksRemaining: car.ghostMinimumTicksRemaining,
@@ -416,11 +486,15 @@ function proposeCar(race: RaceState, car: CarState, input: CarInput | undefined,
     * (1 + slipstream);
   // The automatic throttle lifts for a corner it is about to enter. Boost deliberately does
   // not lift, which is what turns a Boost charge into a decision instead of free speed.
-  const target = boosting ? unrestricted : Math.min(unrestricted, corneringTarget(race.track, car));
+  const assisted = race.configuration.rules === undefined || race.configuration.assist === true;
+  const throttle = assisted ? 1 : clamp(input?.throttle ?? 0, 0, 1);
+  const target = input?.brake ? 0 : assisted && !boosting
+    ? Math.min(unrestricted, corneringTarget(race.track, car, race.configuration.rules !== undefined))
+    : unrestricted * throttle;
 
   const speed = car.speed < target
     ? Math.min(target, car.speed + car.profile.accelerationPerSecondSquared * TICK_SECONDS)
-    : Math.max(target, car.speed - car.profile.brakingPerSecondSquared * TICK_SECONDS);
+    : Math.max(target, car.speed - (input?.brake || assisted ? car.profile.brakingPerSecondSquared : 3) * TICK_SECONDS);
   let transition = car.laneTransition;
   if (transition?.phase === "returning") {
     const progress = Math.max(0, transition.progress - 1 / car.profile.laneChangeDurationTicks);
@@ -435,12 +509,12 @@ function proposeCar(race: RaceState, car: CarState, input: CarInput | undefined,
     }
   }
   return {
-    car, speed, distance: speed * TICK_SECONDS, lane: car.lane, transition, contact: null,
+    ...inventory, car, speed, distance: speed * TICK_SECONDS * lanePaceFactor(race, car), lane: car.lane, transition, contact: null,
     crashRecoveryTicksRemaining: 0,
     ghost: car.ghost,
     ghostMinimumTicksRemaining: car.ghostMinimumTicksRemaining,
     shieldTicksRemaining, boostTicksRemaining, boostCharges,
-    deslotPressure: nextDeslotPressure(race.track, car, speed),
+    deslotPressure: nextDeslotPressure(race.track, car, speed, race.configuration.rules !== undefined),
     drafting: slipstream > 0, activatedBoost, crashedThisTick: false,
   };
 }
@@ -450,17 +524,17 @@ function proposeCar(race: RaceState, car: CarState, input: CarInput | undefined,
  * to enter. A corner still ahead contributes the speed the Car can arrive at it from, so
  * the lift starts at the braking point rather than at the corner's mouth.
  */
-export function automaticSpeedTarget(track: Track, car: CarState, slipstreamBonus = car.drafting ? PROVISIONAL_SLIPSTREAM.maximumBonus : 0): number {
+export function automaticSpeedTarget(track: Track, car: CarState, slipstreamBonus = car.drafting ? PROVISIONAL_SLIPSTREAM.maximumBonus : 0, manualRules = false): number {
   const unrestricted = car.profile.topSpeedPerSecond
     * (car.boostTicksRemaining > 0 ? PROVISIONAL_POWER_UPS.boostSpeedMultiplier : 1)
     * (1 + slipstreamBonus);
-  return car.boostTicksRemaining > 0 ? unrestricted : Math.min(unrestricted, corneringTarget(track, car));
+  return car.boostTicksRemaining > 0 ? unrestricted : Math.min(unrestricted, corneringTarget(track, car, manualRules));
 }
 
-function corneringTarget(track: Track, car: CarState): number {
+function corneringTarget(track: Track, car: CarState, manualRules = false): number {
   let target = Infinity;
   for (const corner of track.corners ?? []) {
-    const limit = cornerLaneLimit(corner, occupiedLanes(car));
+    const limit = cornerLaneLimit(corner, occupiedLanes(car), manualRules);
     const into = forwardDistance(corner.fromProgress, car.progress, track.length);
     if (into < cornerSpan(corner, track.length)) {
       target = Math.min(target, limit);
@@ -486,14 +560,15 @@ function cornerSpan(corner: TrackCorner, length: number): number {
 }
 
 /** A Car straddling two Lanes is held to the tighter of the two limits. */
-function cornerLaneLimit(corner: TrackCorner, lanes: readonly LaneIndex[]): number {
-  return Math.min(...lanes.map((lane) => corner.laneSpeedLimits[lane]!));
+function cornerLaneLimit(corner: TrackCorner, lanes: readonly LaneIndex[], manualRules = false): number {
+  const sum = Math.max(...corner.laneSpeedLimits) + Math.min(...corner.laneSpeedLimits);
+  return Math.min(...lanes.map((lane) => manualRules ? sum - corner.laneSpeedLimits[lane]! : corner.laneSpeedLimits[lane]!));
 }
 
-function nextDeslotPressure(track: Track, car: CarState, speed: number): number {
+function nextDeslotPressure(track: Track, car: CarState, speed: number, manualRules = false): number {
   const corner = activeCorner(track, car);
   if (corner === null) return Math.max(0, car.deslotPressure - PROVISIONAL_CORNERING.deslotRecoveryPerTick);
-  const limit = cornerLaneLimit(corner, occupiedLanes(car));
+  const limit = cornerLaneLimit(corner, occupiedLanes(car), manualRules);
   if (speed <= limit * (1 + PROVISIONAL_CORNERING.overspeedTolerance)) {
     return Math.max(0, car.deslotPressure - PROVISIONAL_CORNERING.deslotRecoveryPerTick);
   }
@@ -657,9 +732,10 @@ function resolveInteractions(
   for (const motion of motions) {
     if (!isInteractive(motion) || isGhost(motion)) continue;
     for (const opportunity of opportunities) {
-      if (opportunity.collected || !occupiedLanes(motion).includes(opportunity.lane)) continue;
+      if (opportunity.collected || (opportunity.phase !== undefined && opportunity.phase !== "active")
+        || !occupiedLanes(motion).includes(opportunity.lane)) continue;
       const authored = opportunityById.get(opportunity.id)!;
-      addSweptCandidate(candidates, motion, authored.progress, "pickup", opportunity.id, motion.car.id, race.track.length);
+      addSweptCandidate(candidates, motion, opportunity.progress ?? authored.progress, "pickup", opportunity.id, motion.car.id, race.track.length);
     }
     for (const obstacle of race.track.fixedObstacles ?? []) {
       if (occupiedLanes(motion).includes(obstacle.lane)) addSweptCandidate(candidates, motion, obstacle.progress, "fixed_obstacle", obstacle.id, motion.car.id, race.track.length);
@@ -692,11 +768,33 @@ function resolveInteractions(
       if (isGhost(motion)) continue;
       const opportunity = opportunities.find((value) => value.id === candidate.sourceId)!;
       if (opportunity.collected) continue;
+      const dynamic = race.configuration.rules !== undefined;
+      if (dynamic && ((motion.car.travelled ?? 0) - motion.lastPickupTravel < race.track.length * 0.18
+        || race.tick - motion.lastPickupTick < 120
+        || motion.boostCharges + motion.shieldCharges + motion.mineCharges >= 3)) continue;
+      if (dynamic && ((opportunity.effect === "boost" && motion.boostCharges >= 2)
+        || (opportunity.effect === "shield" && motion.shieldCharges >= 1)
+        || (opportunity.effect === "hazard" && motion.mineCharges >= 1))) continue;
       opportunity.collected = true;
-      if (opportunity.effect === "shield") motion.shieldTicksRemaining = PROVISIONAL_DURATIONS.shieldTicks;
-      if (opportunity.effect === "boost") motion.boostCharges = Math.min(PROVISIONAL_POWER_UPS.maximumBoostCharges, motion.boostCharges + 1);
+      if (dynamic) {
+        opportunity.phase = "cooldown";
+        const next = nextRandom(randomState); randomState = next.state;
+        opportunity.ticksRemaining = 180 + ((next.value >>> 8) % 121);
+        motion.lastPickupTravel = motion.car.travelled ?? 0;
+        motion.lastPickupTick = race.tick;
+        // Party's recovery aid changes only a collected item's type, never car performance.
+        const leader = Math.max(...race.cars.map((car) => car.completedLaps * race.track.length + car.progress));
+        const deficit = leader - (motion.car.completedLaps * race.track.length + motion.car.progress);
+        if (race.configuration.rules === "party" && deficit > race.track.length * 0.15 && opportunity.effect === "hazard") {
+          const alternative = motion.boostCharges < 2 ? "boost" : "shield";
+          if (opportunityById.get(opportunity.id)!.allowedEffects.includes(alternative)) opportunity.effect = alternative;
+        }
+        if (opportunity.effect === "shield") motion.shieldCharges = Math.min(1, motion.shieldCharges + 1);
+        if (opportunity.effect === "hazard") motion.mineCharges = Math.min(1, motion.mineCharges + 1);
+      } else if (opportunity.effect === "shield") motion.shieldTicksRemaining = PROVISIONAL_DURATIONS.shieldTicks;
+      if (opportunity.effect === "boost") motion.boostCharges = Math.min(dynamic ? 2 : PROVISIONAL_POWER_UPS.maximumBoostCharges, motion.boostCharges + 1);
       events.push({ type: "power_up_collected", carId: motion.car.id, opportunityId: opportunity.id, effect: opportunity.effect, tick: race.tick, timeSeconds });
-      if (opportunity.effect === "hazard") {
+      if (!dynamic && opportunity.effect === "hazard") {
         const placement = placeHazard(race, authoredProgress(race.track, opportunity.id), candidate.fraction, motions, hazards, randomState, nextHazardSequence);
         randomState = placement.randomState;
         if (placement.hazard !== null) {
@@ -708,7 +806,7 @@ function resolveInteractions(
       continue;
     }
     if (candidate.kind === "boosted_impact") {
-      if (motion.boostTicksRemaining === 0 || isGhost(motion) || isGhost(target)) continue;
+      if (motion.boostTicksRemaining === 0 || (race.configuration.rules !== undefined && (motion.bargeTicks === 0 || motion.bargeTicks > 6)) || isGhost(motion) || isGhost(target)) continue;
       events.push({ type: "boosted_impact", carId: motion.car.id, targetCarId: target.car.id, tick: race.tick, timeSeconds });
       if (consumeShield(target, candidate.sourceId, race, candidate.fraction, events)) {
         motion.speed *= PROVISIONAL_CONTACT.trailingSpeedRetainedOnEntry;
@@ -764,7 +862,7 @@ function crashCar(motion: CarProposal, distance: number, cause: CrashCause, sour
   motion.speed = 0;
   motion.transition = null;
   motion.contact = null;
-  motion.crashRecoveryTicksRemaining = PROVISIONAL_DURATIONS.crashRecoveryTicks;
+  motion.crashRecoveryTicksRemaining = race.configuration.rules === undefined ? PROVISIONAL_DURATIONS.crashRecoveryTicks : 36;
   motion.deslotPressure = 0;
   motion.drafting = false;
   motion.ghost = false;
@@ -777,14 +875,14 @@ function placeHazard(race: RaceState, collectorProgress: number, placementFracti
   const valid: { location: HazardPlacementLocation; lane: LaneIndex }[] = [];
   for (const location of [...(race.track.hazardPlacementLocations ?? [])].sort(compareIdsById)) {
     const behind = forwardDistance(location.progress, collectorProgress, race.track.length);
-    if (behind === 0 || behind > race.track.length / 2) continue;
+    if (behind === 0 || behind > (race.configuration.rules === undefined ? race.track.length / 2 : 35)) continue;
     for (const lane of [...location.allowedLanes].sort((a, b) => a - b)) {
       const occupiedByCar = motions.some((motion) => isInteractive(motion) && !isGhost(motion) && occupiedLanes(motion).includes(lane)
         && cyclicClearance(
           location.progress,
           modulo(motion.car.progress + motion.distance * placementFraction, race.track.length),
           race.track.length,
-        ) <= PROVISIONAL_CONTACT.minimumLongitudinalGap);
+        ) <= (race.configuration.rules === undefined ? PROVISIONAL_CONTACT.minimumLongitudinalGap : 8));
       const occupied = occupiedByCar
         || (race.track.fixedObstacles ?? []).some((obstacle) => obstacle.lane === lane && obstacle.progress === location.progress)
         || hazards.some((hazard) => hazard.lane === lane && hazard.progress === location.progress);
@@ -842,7 +940,7 @@ function resolveFollowingPair(race: RaceState, trailing: CarProposal, leading: C
   const gap = forwardDistance(trailing.car.progress, leading.car.progress, race.track.length);
   const requiredTravel = gap + leading.distance - PROVISIONAL_CONTACT.minimumLongitudinalGap;
   if (trailing.distance < requiredTravel) return;
-  if (trailing.boostTicksRemaining > 0) return;
+  if (trailing.boostTicksRemaining > 0 && (race.configuration.rules === undefined || trailing.bargeTicks > 0 && trailing.bargeTicks <= 6)) return;
   const previous = trailing.car.ordinaryContact;
   const entering = previous?.leadingCarId !== leading.car.id;
   const proposedTrailingDistance = trailing.distance;
@@ -865,6 +963,7 @@ function commitCar(race: RaceState, motion: CarProposal, events: RaceEvent[]): C
       crashRecoveryTicksRemaining: motion.crashRecoveryTicksRemaining, ghost: motion.ghost,
       shieldTicksRemaining: motion.shieldTicksRemaining, boostTicksRemaining: motion.boostTicksRemaining,
       boostCharges: motion.boostCharges, deslotPressure: motion.deslotPressure, drafting: false,
+      ...(race.configuration.rules === undefined ? {} : { bargeTicks: motion.bargeTicks, bargeCooldown: motion.bargeCooldown }),
     };
   }
   const respawned = car.crashRecoveryTicksRemaining > 0 && motion.crashRecoveryTicksRemaining === 0;
@@ -872,11 +971,12 @@ function commitCar(race: RaceState, motion: CarProposal, events: RaceEvent[]): C
   let completedLaps = car.completedLaps;
   let finishedAtSeconds = car.finishedAtSeconds;
   let result: CarResult = car.result;
-  let respawnProgress = car.respawnProgress;
+  let respawnProgress = race.configuration.rules !== undefined && motion.crashedThisTick
+    ? modulo(car.progress + Math.max(0, motion.distance), race.track.length) : car.respawnProgress;
   const startProgress = respawned ? car.respawnProgress : car.progress;
   const forwardTravel = Math.max(0, motion.distance);
   for (const crossing of crossedMarkers(race.track, startProgress, forwardTravel)) {
-    if (motion.crashedThisTick && crossing.distance >= forwardTravel) continue;
+    if (race.configuration.rules === undefined && motion.crashedThisTick && crossing.distance >= forwardTravel) continue;
     if (finishedAtSeconds !== null) break;
     const timeSeconds = (race.tick + crossing.distance / forwardTravel) * TICK_SECONDS;
     if (crossing.kind === "checkpoint") {
@@ -903,7 +1003,15 @@ function commitCar(race: RaceState, motion: CarProposal, events: RaceEvent[]): C
     lane: motion.lane,
     laneTransition: result === "racing" ? motion.transition : null,
     ordinaryContact: result === "racing" ? motion.contact : null,
-    nextCheckpointIndex, completedLaps, finishedAtSeconds, result, respawnProgress,
+    nextCheckpointIndex, completedLaps, finishedAtSeconds, result,
+    respawnProgress: race.configuration.rules !== undefined && motion.crashedThisTick
+      ? modulo(car.progress + forwardTravel, race.track.length) : respawnProgress,
+    ...(race.configuration.rules === undefined ? {} : {
+      shieldCharges: motion.shieldCharges, mineCharges: motion.mineCharges,
+      travelled: (car.travelled ?? 0) + forwardTravel,
+      lastPickupTravel: motion.lastPickupTravel, lastPickupTick: motion.lastPickupTick,
+      bargeTicks: motion.bargeTicks, bargeCooldown: motion.bargeCooldown,
+    }),
     crashRecoveryTicksRemaining: motion.crashRecoveryTicksRemaining,
     ghost: motion.ghost,
     ghostMinimumTicksRemaining: respawned
@@ -1074,3 +1182,28 @@ function assertPositiveFinite(value: number, label: string): void { if (!Number.
 function assertNonNegativeFinite(value: number, label: string): void { if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be non-negative and finite`); }
 function modulo(value: number, modulus: number): number { return ((value % modulus) + modulus) % modulus; }
 function clamp(value: number, minimum: number, maximum: number): number { return Math.min(maximum, Math.max(minimum, value)); }
+
+/** Inner lanes shorten the route but tolerate less physical speed. */
+function lanePaceFactor(race: RaceState, car: CarState): number {
+  if (race.configuration.rules === undefined) return 1;
+  const corner = activeCorner(race.track, car);
+  if (corner === null) return 1;
+  const mean = corner.laneSpeedLimits.reduce((sum, limit) => sum + limit, 0) / 4;
+  return Math.min(...occupiedLanes(car).map((lane) => corner.laneSpeedLimits[lane]! / mean));
+}
+
+export function gripLimit(race: RaceState, car: CarState): number {
+  const corner = activeCorner(race.track, car);
+  return corner === null ? Infinity : cornerLaneLimit(corner, occupiedLanes(car), race.configuration.rules !== undefined);
+}
+
+export function raceCarProfile(assetId: string, voltage: 3 | 6 | 9 = 6): CarProfile {
+  const profiles: Record<string, readonly [number, number, number, number]> = {
+    "r2-car-club": [9, 18, 17, 6], "r2-car-muscle": [7.5, 19, 14, 8],
+    "r2-car-prototype": [10, 17.5, 17, 5], "r2-car-gt": [8.5, 18.5, 19, 6],
+  };
+  const [acceleration, speed, braking, laneTicks] = profiles[assetId] ?? profiles["r2-car-club"]!;
+  const scale = voltage === 3 ? 0.78 : voltage === 9 ? 1.22 : 1;
+  return { accelerationPerSecondSquared: acceleration * scale, topSpeedPerSecond: speed * scale,
+    brakingPerSecondSquared: braking, laneChangeDurationTicks: laneTicks };
+}

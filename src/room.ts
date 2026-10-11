@@ -1,10 +1,12 @@
 import { WORKSHOP_TRACK } from "./authored-track";
+import { DEFAULT_CAR_ASSET_ID, RACING_CAR_ASSETS, isRacingCarAssetId } from "./racing-assets";
 import { BOT_DIFFICULTY_PROFILES, botInput } from "./bot";
 import {
   COUNTDOWN_TICKS,
   DEFAULT_RACE_LAPS,
   EMPTY_ROOM_EXPIRATION_MS,
   INPUT_LEASE_TICKS,
+  LANE_INPUT_BUFFER_LANE_CHANGES,
   MAX_CONFIGURED_BOTS,
   MAX_CONNECTION_GENERATION,
   MAX_LAPS,
@@ -17,9 +19,10 @@ import {
   SNAPSHOT_INTERVAL_TICKS,
   type SoloRaceConfiguration,
 } from "./multiplayer-config";
-import type { InputCommand } from "./protocol";
+import { validRaceConfiguration, type InputCommand } from "./protocol";
 import {
   PROVISIONAL_CAR_PROFILE,
+  raceCarProfile,
   advanceRace,
   createRace,
   finishRaceWithDnfs,
@@ -41,6 +44,7 @@ export type RaceSeatController = "human" | "bot" | "none";
 export interface RoomPlayer {
   readonly id: string;
   readonly name: string;
+  readonly carAssetId?: string;
   readonly role: PlayerRole;
   readonly raceSeatId: string | null;
   readonly controller: RaceSeatController;
@@ -89,6 +93,7 @@ export interface CreateRoomOptions {
   readonly code: string;
   readonly hostId: string;
   readonly hostName: string;
+  readonly hostCarAssetId?: string;
   readonly track?: Track;
   readonly carProfile?: CarProfile;
   readonly configuration?: RaceConfiguration;
@@ -101,6 +106,7 @@ export interface CreateRoomOptions {
 interface PlayerRecord {
   readonly id: string;
   readonly name: string;
+  readonly carAssetId: string;
   role: PlayerRole;
   readonly joinOrder: number;
   connected: boolean;
@@ -112,7 +118,20 @@ interface PlayerRecord {
 interface RaceSeatControl {
   controller: RaceSeatController;
   pendingLaneChange: LaneChangeDirection | undefined;
+  /**
+   * One Lane edge that arrived while the Car was already changing Lane, with the Room tick it
+   * arrived on. It is promoted to `pendingLaneChange` on the first tick the Car can take it,
+   * and expires once it has waited longer than `laneInputBufferTicks`. At most one edge is
+   * ever held, so a Racer cannot queue a run of Lane changes out of one burst of presses.
+   */
+  bufferedLaneChange: LaneChangeDirection | undefined;
+  bufferedLaneChangeTick: number;
   pendingBoost: boolean;
+  throttle: number;
+  brake: boolean;
+  pendingShield: boolean;
+  pendingMine: boolean;
+  pendingBarge: boolean;
   lastSequence: number;
   lastInputServerTick: number;
   takeoverPending: boolean;
@@ -122,7 +141,7 @@ interface RaceSeatControl {
   bestTimeEligible: boolean;
 }
 
-type InputIntent = Pick<InputCommand, "raceId" | "seq" | "laneChange" | "useBoost">;
+type InputIntent = Pick<InputCommand, "raceId" | "seq" | "laneChange" | "useBoost" | "throttle" | "brake" | "useShield" | "useMine" | "barge">;
 
 export class Room {
   readonly code: string;
@@ -154,7 +173,7 @@ export class Room {
   constructor(options: CreateRoomOptions) {
     if (!options.code || !options.hostId || !options.hostName) throw new Error("Room code, Host id, and Host name are required");
     validateConfiguration(options.configuration ?? { laps: DEFAULT_RACE_LAPS });
-    if (options.soloConfiguration !== undefined) validateSoloConfiguration(options.soloConfiguration);
+    if (options.soloConfiguration !== undefined) validateSoloConfiguration(options.soloConfiguration, options.configuration?.rules === "trial");
     this.code = options.code;
     this.hostIdValue = options.hostId;
     this.track = options.track ?? WORKSHOP_TRACK;
@@ -173,7 +192,7 @@ export class Room {
     this.raceIdFactory = options.createRaceId ?? (() => crypto.randomUUID());
     this.tokenFactory = options.createReconnectToken ?? defaultToken;
     this.clock = options.now ?? Date.now;
-    this.players.set(options.hostId, this.newPlayer(options.hostId, options.hostName, "racer"));
+    this.players.set(options.hostId, this.newPlayer(options.hostId, options.hostName, "racer", options.hostCarAssetId));
   }
 
   get phase(): RoomPhase { return this.phaseValue; }
@@ -195,7 +214,7 @@ export class Room {
     return player?.connected === true && player.connectionGeneration === generation;
   }
 
-  join(playerId: string, name: string): RoomPlayer {
+  join(playerId: string, name: string, carAssetId?: string): RoomPlayer {
     if (this.soloConfigurationValue !== null) throw new Error("Solo Rooms do not accept joins");
     const existing = this.players.get(playerId);
     if (existing !== undefined) return this.publicPlayer(existing);
@@ -207,7 +226,7 @@ export class Room {
     const role: PlayerRole = this.phaseValue === "open" && racerCount < MAX_RACERS ? "racer" : "spectator";
     const roleCount = [...this.players.values()].filter((player) => player.role === role).length;
     if (role === "spectator" && roleCount >= MAX_SPECTATORS) throw new Error("Spectator limit reached");
-    const player = this.newPlayer(playerId, name, role);
+    const player = this.newPlayer(playerId, name, role, carAssetId);
     this.players.set(playerId, player);
     this.emptySince = null;
     this.version += 1;
@@ -277,10 +296,14 @@ export class Room {
     this.configurationValue = configuration;
     this.raceIdValue = raceId;
     const raceSeats = [...this.participants, ...this.configuredBots.map((bot) => bot.id)].sort(compareIds);
+    const unusedBodies = RACING_CAR_ASSETS.filter((asset) => !this.participants.some((id) => this.players.get(id)?.carAssetId === asset.id));
     this.raceValue = createRace({
       track: this.track,
       configuration,
-      cars: raceSeats.map((id, index) => ({ id, profile: this.carProfile, lane: index as LaneIndex })),
+      cars: raceSeats.map((id, index) => ({ id,
+        profile: configuration.rules === undefined ? this.carProfile : raceCarProfile(
+          this.players.get(id)?.carAssetId ?? unusedBodies[this.configuredBots.findIndex((bot) => bot.id === id) % unusedBodies.length]?.id ?? DEFAULT_CAR_ASSET_ID, configuration.voltage),
+        lane: index as LaneIndex })),
       seed: hashRaceId(raceId),
     });
     this.controls.clear();
@@ -291,6 +314,32 @@ export class Room {
     this.phaseValue = "countdown";
     this.version += 1;
     return raceId;
+  }
+
+  /**
+   * Promotes a held Lane edge on the first tick its Car can act on it, or drops it once it is
+   * stale.
+   *
+   * This runs during input assembly, before the simulation tick, so the buffered edge is read
+   * from the same pre-tick Car state as every other input and its timing depends only on the
+   * Room's own tick counter. A held edge waits out a Blocked return exactly as it waits out an
+   * ordinary change, because both leave `laneTransition` set until they finish.
+   */
+  private promoteBufferedLaneChange(playerId: string, control: RaceSeatControl): void {
+    if (control.bufferedLaneChange === undefined) return;
+    const car = this.raceValue?.cars.find((candidate) => candidate.id === playerId);
+    // The comparison is inclusive: an edge held for exactly the window is still promoted,
+    // because the window is the longest legitimate wait rather than one tick past it.
+    if (car === undefined || this.serverTick - control.bufferedLaneChangeTick > laneInputBufferTicks(car.profile)) {
+      control.bufferedLaneChange = undefined;
+      control.bufferedLaneChangeTick = 0;
+      return;
+    }
+    if (control.pendingLaneChange !== undefined) return;
+    if (car.result !== "racing" || car.crashRecoveryTicksRemaining > 0 || car.laneTransition !== null) return;
+    control.pendingLaneChange = control.bufferedLaneChange;
+    control.bufferedLaneChange = undefined;
+    control.bufferedLaneChangeTick = 0;
   }
 
   acceptInput(playerId: string, input: InputIntent): boolean;
@@ -305,9 +354,16 @@ export class Room {
       || control.reclaimPending || input.seq <= control.lastSequence) return false;
     if (input.laneChange !== undefined) {
       const car = this.raceValue?.cars.find((candidate) => candidate.id === playerId);
-      if (car === undefined || car.result !== "racing" || car.crashRecoveryTicksRemaining > 0
-        || car.laneTransition !== null || control.pendingLaneChange !== undefined) return false;
-      control.pendingLaneChange = input.laneChange;
+      if (car === undefined || car.result !== "racing" || car.crashRecoveryTicksRemaining > 0) return false;
+      if (car.laneTransition === null && control.pendingLaneChange === undefined) {
+        control.pendingLaneChange = input.laneChange;
+      } else if (control.bufferedLaneChange === undefined) {
+        // The Car cannot take this edge on this tick, so hold it rather than drop it. A press
+        // made a few frames before the current transition lands is the same intent as one made
+        // a few frames after, and eating it is what made Lane changing feel unresponsive.
+        control.bufferedLaneChange = input.laneChange;
+        control.bufferedLaneChangeTick = this.serverTick;
+      } else return false;
     }
     if (input.useBoost === true) {
       // A spend is only accepted when the Race can act on it, so a rejected press does not
@@ -317,6 +373,14 @@ export class Room {
         || car.ghost || car.boostCharges === 0 || car.boostTicksRemaining > 0) return false;
       control.pendingBoost = true;
     }
+    if (input.throttle !== undefined) {
+      if (!Number.isFinite(input.throttle) || input.throttle < 0 || input.throttle > 1) return false;
+      control.throttle = input.throttle;
+    }
+    if (input.brake !== undefined) control.brake = input.brake;
+    if (input.useShield) control.pendingShield = true;
+    if (input.useMine) control.pendingMine = true;
+    if (input.barge) control.pendingBarge = true;
     control.lastSequence = input.seq;
     control.lastInputServerTick = this.serverTick;
     this.version += 1;
@@ -382,14 +446,20 @@ export class Room {
           this.version += 1;
         }
         if (control.controller === "bot") control.bestTimeEligible = false;
+        else this.promoteBufferedLaneChange(id, control);
         inputs[id] = control.controller === "bot"
           ? botInput(this.raceValue!, id, BOT_DIFFICULTY_PROFILES.normal)
           : {
             ...(control.pendingLaneChange === undefined ? {} : { laneChange: control.pendingLaneChange }),
             ...(control.pendingBoost ? { useBoost: true } : {}),
+            throttle: control.throttle, brake: control.brake,
+            ...(control.pendingShield ? { useShield: true } : {}),
+            ...(control.pendingMine ? { useMine: true } : {}),
+            ...(control.pendingBarge ? { barge: true } : {}),
           };
         control.pendingLaneChange = undefined;
         control.pendingBoost = false;
+        control.pendingShield = false; control.pendingMine = false; control.pendingBarge = false;
       }
       if (this.soloConfigurationValue !== null) {
         const profile = BOT_DIFFICULTY_PROFILES[this.soloConfigurationValue.botDifficulty];
@@ -453,8 +523,9 @@ export class Room {
     };
   }
 
-  private newPlayer(id: string, name: string, role: PlayerRole): PlayerRecord {
-    return { id, name, role, joinOrder: this.nextJoinOrder++, connected: true, connectionGeneration: 1,
+  private newPlayer(id: string, name: string, role: PlayerRole, carAssetId: string = DEFAULT_CAR_ASSET_ID): PlayerRecord {
+    if (!isRacingCarAssetId(carAssetId)) throw new Error("Car selection is invalid");
+    return { id, name, role, carAssetId, joinOrder: this.nextJoinOrder++, connected: true, connectionGeneration: 1,
       reconnectToken: this.issueToken(), disconnectedAt: null };
   }
 
@@ -463,6 +534,7 @@ export class Room {
     return Object.freeze({
       id: player.id,
       name: player.name,
+      carAssetId: player.carAssetId,
       role: player.role,
       raceSeatId: player.role === "racer" ? player.id : null,
       controller: control?.controller ?? "none",
@@ -570,14 +642,33 @@ export class Room {
 }
 
 function newControl(serverTick: number): RaceSeatControl {
-  return { controller: "human", pendingLaneChange: undefined, pendingBoost: false, lastSequence: -1,
+  return { controller: "human", pendingLaneChange: undefined, bufferedLaneChange: undefined,
+    bufferedLaneChangeTick: 0, pendingBoost: false, throttle: 0, brake: false, pendingShield: false, pendingMine: false, pendingBarge: false, lastSequence: -1,
     lastInputServerTick: serverTick, takeoverPending: false, reclaimPending: false,
     reclaimCheckpointId: null, reclaimReady: false, bestTimeEligible: true };
 }
 
+/**
+ * The longest a held Lane edge may wait, in ticks, for a Car with this profile.
+ *
+ * Two ticks more than the Lane change it waits out, and both are load-bearing. `acceptInput`
+ * runs between ticks, so an edge that arrives in the same gap as the edge that starts the
+ * transition is stamped one tick before that transition is created; and a transition is only
+ * cleared *during* the tick that finishes it, so the Car first reads as free to the following
+ * tick's input assembly. Together those put the worst legitimate wait — the fastest possible
+ * double tap, both presses landing in one tick gap — at exactly this many ticks.
+ */
+export function laneInputBufferTicks(profile: CarProfile): number {
+  return profile.laneChangeDurationTicks * LANE_INPUT_BUFFER_LANE_CHANGES + 2;
+}
+
 function clearControl(control: RaceSeatControl): void {
   control.pendingLaneChange = undefined;
+  control.bufferedLaneChange = undefined;
+  control.bufferedLaneChangeTick = 0;
   control.pendingBoost = false;
+  control.throttle = 0; control.brake = false;
+  control.pendingShield = false; control.pendingMine = false; control.pendingBarge = false;
 }
 
 function defaultToken(): string {
@@ -594,13 +685,13 @@ function compareIds(a: string, b: string): number { return a < b ? -1 : a > b ? 
 function comparePlayers(a: PlayerRecord, b: PlayerRecord): number { return a.joinOrder - b.joinOrder || compareIds(a.id, b.id); }
 
 function validateConfiguration(configuration: RaceConfiguration): void {
-  if (!Number.isInteger(configuration.laps) || configuration.laps < 1 || configuration.laps > MAX_LAPS) {
+  if (!validRaceConfiguration(configuration) || !Number.isInteger(configuration.laps) || configuration.laps < 1 || configuration.laps > MAX_LAPS) {
     throw new Error(`Race laps must be an integer from 1 to ${MAX_LAPS}`);
   }
 }
 
-function validateSoloConfiguration(configuration: SoloRaceConfiguration): void {
-  if (!Number.isInteger(configuration.botCount) || configuration.botCount < 1 || configuration.botCount > MAX_CONFIGURED_BOTS) {
+function validateSoloConfiguration(configuration: SoloRaceConfiguration, trial = false): void {
+  if (!Number.isInteger(configuration.botCount) || configuration.botCount < (trial ? 0 : 1) || (trial && configuration.botCount !== 0) || configuration.botCount > MAX_CONFIGURED_BOTS) {
     throw new Error(`Solo Bot count must be an integer from 1 to ${MAX_CONFIGURED_BOTS}`);
   }
   if (configuration.botDifficulty !== "easy" && configuration.botDifficulty !== "normal" && configuration.botDifficulty !== "hard") {

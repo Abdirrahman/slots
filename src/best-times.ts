@@ -22,9 +22,11 @@ export interface StorageLike { getItem(key: string): string | null; setItem(key:
 export function bestTimeKey(identity: BestTimeIdentity): string {
   const profile = identity.carProfile;
   return [
-    "slots:best-time:v1", identity.trackId, identity.trackVersion,
+    "slots:best-time:v2", identity.trackId, identity.trackVersion,
     `laps=${identity.configuration.laps}`, `profile=${identity.carProfileId}`,
-    profile.accelerationPerSecondSquared, profile.topSpeedPerSecond, profile.laneChangeDurationTicks,
+    profile.accelerationPerSecondSquared, profile.topSpeedPerSecond, profile.brakingPerSecondSquared, profile.laneChangeDurationTicks,
+    `rules=${identity.configuration.rules ?? "legacy"}`, `assist=${identity.configuration.assist ?? true}`,
+    `voltage=${identity.configuration.voltage ?? "legacy"}`,
     ...(identity.soloConfiguration === null ? [] : [
       `bots=${identity.soloConfiguration.botCount}`,
       `difficulty=${identity.soloConfiguration.botDifficulty}`,

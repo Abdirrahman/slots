@@ -17,14 +17,16 @@ import {
 } from "./multiplayer-config";
 import {
   PROTOCOL_VERSION,
+  validRaceConfiguration,
   type ServerErrorMessage,
   type ServerIdentityMessage,
   type ServerRaceEventsMessage,
   type ServerSnapshotMessage as ProtocolSnapshotMessage,
 } from "./protocol";
-import { CRASH_CAUSES, PROVISIONAL_CORNERING, PROVISIONAL_DURATIONS, PROVISIONAL_POWER_UPS, TICKS_PER_SECOND, automaticSpeedTarget, type CarState, type LaneChangeDirection, type RaceEvent, type RaceState } from "./race";
+import { CRASH_CAUSES, PROVISIONAL_CORNERING, PROVISIONAL_DURATIONS, PROVISIONAL_POWER_UPS, TICKS_PER_SECOND, automaticSpeedTarget, type CarState, type LaneChangeDirection, type LaneIndex, type RaceEvent, type RaceState } from "./race";
 import type { RoomSnapshot } from "./room";
-import { interpolateCarPose, lanePosition, sampleTrackPose, type TrackPose } from "./presentation";
+import { isRacingCarAssetId } from "./racing-assets";
+import { interpolateCarMotion, lanePosition, sampleTrackPose, type CarMotion, type TrackPose } from "./presentation";
 
 export type ServerSnapshotMessage = ProtocolSnapshotMessage<RoomSnapshot>;
 export type ServerMessage = ServerSnapshotMessage | ServerIdentityMessage | ServerRaceEventsMessage | ServerErrorMessage;
@@ -103,74 +105,116 @@ export function snapshotAlpha(secondsSinceCurrent: number): number {
   return clamp(secondsSinceCurrent / snapshotSeconds, 0, 1);
 }
 
+/** The motion an observed Car reads as having, interpolated between the last two snapshots. */
+export function snapshotCarMotion(pair: SnapshotPair, carId: string, alpha: number): CarMotion | null {
+  const currentRace = pair.current.state.race;
+  if (currentRace === null) return null;
+  const current = findCar(currentRace, carId);
+  if (current === undefined) return null;
+  const settled: CarMotion = { progress: current.progress, lane: lanePosition(current) };
+  if (current.result !== "racing") return settled;
+  const previousRace = pair.previous?.state.race;
+  const previous = previousRace?.track.id === currentRace.track.id ? findCar(previousRace, carId) : undefined;
+  if (
+    previous === undefined
+    || current.crashRecoveryTicksRemaining > 0
+    || current.ghost
+    || previous.crashRecoveryTicksRemaining > 0
+    || previous.ghost !== current.ghost
+  ) return settled;
+  return interpolateCarMotion(currentRace.track, previous, current, alpha);
+}
+
 export function interpolateSnapshotCar(
   pair: SnapshotPair,
   carId: string,
   alpha: number,
 ): TrackPose | null {
-  const currentRace = pair.current.state.race;
-  if (currentRace === null) return null;
-  const current = findCar(currentRace, carId);
-  if (current === undefined) return null;
-  if (current.result !== "racing") return sampleTrackPose(currentRace.track, current.progress, lanePosition(current));
-  const previousRace = pair.previous?.state.race;
-  const previous = previousRace?.track.id === currentRace.track.id ? findCar(previousRace, carId) : undefined;
-  if (
-    current.crashRecoveryTicksRemaining > 0
-    || current.ghost
-    || previous?.crashRecoveryTicksRemaining
-    || previous?.ghost !== current.ghost
-  ) return sampleTrackPose(currentRace.track, current.progress, lanePosition(current));
-  return previous === undefined
-    ? sampleTrackPose(currentRace.track, current.progress, lanePosition(current))
-    : interpolateCarPose(currentRace.track, previous, current, alpha);
+  const motion = snapshotCarMotion(pair, carId, alpha);
+  if (motion === null) return null;
+  return sampleTrackPose(pair.current.state.race!.track, motion.progress, motion.lane);
+}
+
+/**
+ * The Lane the local Racer's own input has already committed their Car to.
+ *
+ * Lane is predicted where forward travel is not. A Lane transition is the Racer's decision
+ * and the Room advances it by a fixed fraction per tick, so the client can reproduce it
+ * exactly; forward travel is the Track's decision and cannot be reproduced without knowing
+ * what the Car is about to hit. A mispredicted Lane is also self-correcting in a way a
+ * mispredicted progress is not — a Blocked change renders as a partial move followed by a
+ * return, which is precisely what the authoritative rule produces anyway.
+ *
+ * Only a Car that cannot act on a Lane input at all is excluded: a Crashed or recovering
+ * Car, and a Car that has finished or is DNF. Contact, Shield, Boost and Ghost state all
+ * leave Lane changing available, and contact is the state where a Racer most wants it,
+ * because changing Lane is how a constrained Car gets out from behind the Car ahead.
+ */
+export function predictLocalLane(
+  car: CarState,
+  secondsSinceSnapshot: number,
+  laneChange?: LaneChangeDirection,
+): number {
+  if (car.result !== "racing" || car.crashRecoveryTicksRemaining > 0) return lanePosition(car);
+  const advanced = secondsSinceSnapshot * TICKS_PER_SECOND / car.profile.laneChangeDurationTicks;
+  if (car.laneTransition !== null) {
+    const progress = car.laneTransition.progress + (car.laneTransition.phase === "returning" ? -advanced : advanced);
+    return lanePosition({ lane: car.lane, laneTransition: { ...car.laneTransition, progress: clamp(progress, 0, 1) } });
+  }
+  if (laneChange === undefined) return lanePosition(car);
+  const to = car.lane + laneChange;
+  if (to < 0 || to > 3) return lanePosition(car);
+  return lanePosition({
+    lane: car.lane,
+    laneTransition: { from: car.lane, to: to as LaneIndex, progress: clamp(advanced, 0, 1), phase: "changing" },
+  });
+}
+
+/**
+ * Whether the local Car's forward travel can be extrapolated past the last snapshot.
+ *
+ * Anything that can truncate or redirect travel inside the next snapshot interval rules it
+ * out, because a progress prediction that overshoots shows up as the Car snapping backwards
+ * when authority arrives. On a Track carrying obstacles, pickups or live Hazards — which is
+ * every authored Track — that means forward travel is interpolated from authority instead.
+ * The 67 ms this costs is not felt: forward motion is continuous and nothing the Racer does
+ * changes it. Lane is what responds to input, and `predictLocalLane` always predicts it.
+ */
+function canPredictProgress(race: RaceState, car: CarState): boolean {
+  return race.configuration.rules === undefined && car.result === "racing"
+    && car.ordinaryContact === null
+    && car.crashRecoveryTicksRemaining === 0
+    && !car.ghost
+    && car.shieldTicksRemaining === 0
+    && car.boostTicksRemaining === 0
+    && (race.track.fixedObstacles?.length ?? 0) === 0
+    && (race.track.powerUpOpportunities?.length ?? 0) === 0
+    && race.hazards.length === 0;
 }
 
 export function predictLocalCarPose(
-  race: RaceState,
+  pair: SnapshotPair,
   carId: string,
   secondsSinceSnapshot: number,
   laneChange?: LaneChangeDirection,
 ): TrackPose | null {
+  const race = pair.current.state.race;
+  if (race === null) return null;
   const car = findCar(race, carId);
   if (car === undefined) return null;
-  if (
-    car.result !== "racing"
-    || car.ordinaryContact !== null
-    || car.crashRecoveryTicksRemaining > 0
-    || car.ghost
-    || car.shieldTicksRemaining > 0
-    || car.boostTicksRemaining > 0
-  ) {
-    return sampleTrackPose(race.track, car.progress, lanePosition(car));
-  }
   const seconds = clamp(secondsSinceSnapshot, 0, SNAPSHOT_INTERVAL_TICKS / TICKS_PER_SECOND);
+  const lane = predictLocalLane(car, seconds, laneChange);
+  if (!canPredictProgress(race, car)) {
+    const observed = snapshotCarMotion(pair, carId, snapshotAlpha(secondsSinceSnapshot))!;
+    return sampleTrackPose(race.track, observed.progress, lane);
+  }
   // Extrapolate with the server's own throttle model, so a corner's lift is predicted rather
   // than corrected away by the next snapshot.
   const target = automaticSpeedTarget(race.track, car);
   const speed = car.speed < target
     ? Math.min(target, car.speed + car.profile.accelerationPerSecondSquared * seconds)
     : Math.max(target, car.speed - car.profile.brakingPerSecondSquared * seconds);
-  const progress = car.progress + ((car.speed + speed) / 2) * seconds;
-  let lane = lanePosition(car);
-
-  if (car.laneTransition !== null) {
-    const added = seconds * TICKS_PER_SECOND / car.profile.laneChangeDurationTicks;
-    const amount = clamp(
-      car.laneTransition.progress + (car.laneTransition.phase === "returning" ? -added : added),
-      0,
-      1,
-    );
-    lane = car.laneTransition.from + (car.laneTransition.to - car.laneTransition.from) * amount;
-  } else if (laneChange !== undefined) {
-    const target = car.lane + laneChange;
-    if (target >= 0 && target <= 3) {
-      const amount = clamp(seconds * TICKS_PER_SECOND / car.profile.laneChangeDurationTicks, 0, 1);
-      lane = car.lane + laneChange * amount;
-    }
-  }
-
-  return sampleTrackPose(race.track, progress, lane);
+  return sampleTrackPose(race.track, car.progress + ((car.speed + speed) / 2) * seconds, lane);
 }
 
 function findCar(race: RaceState, carId: string): CarState | undefined {
@@ -257,6 +301,8 @@ function isValidMilestone6State(state: Record<string, unknown>, localPlayerId: s
     || (solo === null ? configuredBots.length !== 0 : configuredBots.length !== solo.botCount
       || players.length !== 1 || racers.length !== 1 || spectators.length !== 0)) return false;
 
+  if (solo !== null && ((state.configuration as Record<string, unknown>).rules === "trial"
+    ? solo.botCount !== 0 : (solo.botCount as number) < 1)) return false;
   const phase = state.phase;
   const raceValid = state.race === null ? phase === "open" : isValidRace(state.race, state.configuration);
   if (!raceValid
@@ -292,7 +338,8 @@ function isValidConfiguredBot(value: unknown): value is Record<string, unknown> 
 
 function isValidPlayer(value: unknown): value is Record<string, unknown> {
   return isObject(value)
-    && hasExactKeys(value, ["id", "name", "role", "raceSeatId", "controller", "reclaimPending", "bestTimeEligible", "isHost", "connected"])
+    && hasExactKeys(value, ["id", "name", "role", "raceSeatId", "controller", "reclaimPending", "bestTimeEligible", "isHost", "connected", ...(value.carAssetId === undefined ? [] : ["carAssetId"])])
+    && (value.carAssetId === undefined || isRacingCarAssetId(value.carAssetId))
     && isPlayerId(value.id)
     && typeof value.name === "string" && value.name.length > 0 && value.name.length <= MAX_GUEST_NAME_LENGTH
     && value.name === value.name.trim() && !/[\u0000-\u001f\u007f]/u.test(value.name)
@@ -318,15 +365,13 @@ function isValidPlayerState(player: Record<string, unknown>, phase: string, carI
 }
 
 function isValidConfiguration(value: unknown): value is Record<string, unknown> {
-  return isObject(value)
-    && hasExactKeys(value, ["laps"])
-    && Number.isSafeInteger(value.laps) && (value.laps as number) > 0 && (value.laps as number) <= MAX_LAPS;
+  return validRaceConfiguration(value);
 }
 
 function isValidSoloConfiguration(value: unknown): value is Record<string, unknown> {
   return isObject(value)
     && hasExactKeys(value, ["botCount", "botDifficulty"])
-    && Number.isSafeInteger(value.botCount) && (value.botCount as number) >= 1
+    && Number.isSafeInteger(value.botCount) && (value.botCount as number) >= 0
     && (value.botCount as number) <= MAX_CONFIGURED_BOTS
     && (value.botDifficulty === "easy" || value.botDifficulty === "normal" || value.botDifficulty === "hard");
 }
@@ -340,7 +385,7 @@ function isValidRace(value: unknown, roomConfiguration: Record<string, unknown>)
     !Number.isSafeInteger(value.tick) || (value.tick as number) < 0
     || (value.status !== "racing" && value.status !== "finished")
     || !isValidConfiguration(value.configuration)
-    || value.configuration.laps !== roomConfiguration.laps
+    || ["laps", "rules", "assist", "voltage"].some((key) => (value.configuration as Record<string, unknown>)[key] !== roomConfiguration[key])
     || !isObject(value.track) || !isValidTrack(value.track)
     || !Array.isArray(value.cars) || value.cars.length < 1 || value.cars.length > MAX_RACERS
     || !isUint32(value.seed)
@@ -351,12 +396,18 @@ function isValidRace(value: unknown, roomConfiguration: Record<string, unknown>)
     || !isNonNegativeSafeInteger(value.nextHazardSequence)
   ) return false;
 
+  if (value.configuration.rules === "trial" && value.hazards.length !== 0) return false;
   const trackLength = value.track.length as number;
   const checkpointCount = (value.track.checkpoints as unknown[]).length;
   const laps = (value.configuration as Record<string, unknown>).laps as number;
   const carIds = new Set<string>();
   if (!value.cars.every((car) => {
     if (!isValidCar(car, trackLength, checkpointCount, laps) || carIds.has(car.id as string)) return false;
+    if ((value.configuration as Record<string, unknown>).rules !== undefined && (
+      ["shieldCharges", "mineCharges", "travelled", "lastPickupTravel", "lastPickupTick", "bargeTicks", "bargeCooldown"].some((key) => car[key] === undefined)
+      || (car.boostCharges as number) > 2 || (car.boostCharges as number) + (car.shieldCharges as number) + (car.mineCharges as number) > 3
+      || (car.lastPickupTick as number) > (value.tick as number)
+    )) return false;
     carIds.add(car.id as string);
     return true;
   })) return false;
@@ -372,8 +423,9 @@ function isValidRace(value: unknown, roomConfiguration: Record<string, unknown>)
     authoredOpportunities.set(opportunity.id as string, opportunity);
   }
   const opportunityIds = new Set<string>();
-  if (value.powerUpOpportunities.length !== authoredOpportunities.size || !value.powerUpOpportunities.every((opportunity) => {
-    if (!isObject(opportunity) || !hasExactKeys(opportunity, ["id", "lane", "effect", "collected"])) return false;
+  if (value.powerUpOpportunities.length !== (value.configuration.rules === "trial" ? 0 : authoredOpportunities.size) || !value.powerUpOpportunities.every((opportunity) => {
+    if (!isObject(opportunity) || !hasExactKeys(opportunity, ["id", "lane", "effect", "collected",
+      ...["progress", "phase", "ticksRemaining"].filter((key) => opportunity[key] !== undefined)])) return false;
     const authored = authoredOpportunities.get(opportunity.id as string);
     if (
       authored === undefined || opportunityIds.has(opportunity.id as string)
@@ -382,6 +434,16 @@ function isValidRace(value: unknown, roomConfiguration: Record<string, unknown>)
       || !(authored.allowedEffects as unknown[]).includes(opportunity.effect)
       || typeof opportunity.collected !== "boolean"
     ) return false;
+    if ((value.configuration as Record<string, unknown>).rules !== undefined && (
+      !isFiniteRange(opportunity.progress, 0, trackLength)
+      || !["cooldown", "warning", "active"].includes(String(opportunity.phase))
+      || opportunity.collected !== (opportunity.phase === "cooldown")
+      || !isPositiveSafeInteger(opportunity.ticksRemaining) || (opportunity.ticksRemaining as number) > 600
+      || ![...authoredOpportunities.values()].some((zone) => {
+        const delta = Math.abs((opportunity.progress as number) - (zone.progress as number));
+        return Math.min(delta, trackLength - delta) <= (zone.spawnRadius as number | undefined ?? Math.min(12, trackLength * 0.08));
+      })
+    )) return false;
     opportunityIds.add(opportunity.id as string);
     return true;
   })) return false;
@@ -442,7 +504,8 @@ function isValidTrack(value: Record<string, unknown>): boolean {
   }
   for (const opportunity of value.powerUpOpportunities ?? []) {
     if (
-      !isAuthoredPoint(opportunity, ["id", "progress", "allowedEffects"], length, ids)
+      !isAuthoredPoint(opportunity, ["id", "progress", "allowedEffects", ...(opportunity.spawnRadius === undefined ? [] : ["spawnRadius"])], length, ids)
+      || !(opportunity.spawnRadius === undefined || isPositiveFinite(opportunity.spawnRadius) && (opportunity.spawnRadius as number) <= length / 4)
       || !Array.isArray(opportunity.allowedEffects) || opportunity.allowedEffects.length === 0
       || new Set(opportunity.allowedEffects).size !== opportunity.allowedEffects.length
       || !opportunity.allowedEffects.every(isPowerUpEffect)
@@ -501,7 +564,14 @@ function isValidCar(
     "crashRecoveryTicksRemaining", "ghost", "ghostMinimumTicksRemaining",
     "shieldTicksRemaining", "boostTicksRemaining", "boostCharges", "deslotPressure", "drafting",
     "respawnProgress",
+    ...["shieldCharges", "mineCharges", "travelled", "lastPickupTravel", "lastPickupTick", "bargeTicks", "bargeCooldown"].filter((key) => value[key] !== undefined),
   ])) return false;
+  if (["shieldCharges", "mineCharges"].some((key) => value[key] !== undefined && (!isNonNegativeSafeInteger(value[key]) || (value[key] as number) > 1))
+    || value.travelled !== undefined && !isNonNegativeFinite(value.travelled)
+    || value.lastPickupTravel !== undefined && (typeof value.lastPickupTravel !== "number" || !Number.isFinite(value.lastPickupTravel) || value.lastPickupTravel < -trackLength || value.lastPickupTravel > (value.travelled as number))
+    || value.lastPickupTick !== undefined && (!Number.isSafeInteger(value.lastPickupTick) || (value.lastPickupTick as number) < -300)
+    || value.bargeTicks !== undefined && (!isNonNegativeSafeInteger(value.bargeTicks) || (value.bargeTicks as number) > 12)
+    || value.bargeCooldown !== undefined && (!isNonNegativeSafeInteger(value.bargeCooldown) || (value.bargeCooldown as number) > 90)) return false;
   const transition = value.laneTransition;
   const contact = value.ordinaryContact;
   const validTransition = transition === null || (

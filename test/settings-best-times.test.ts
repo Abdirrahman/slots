@@ -47,7 +47,7 @@ describe("local settings and controls", () => {
 describe("browser-local best times", () => {
   test("uses the complete composite key and isolates Track, version, laps, and profile", () => {
     const key = bestTimeKey(identity);
-    expect(key).toContain("workshop-bench|1.0.0|laps=3|profile=balanced-v1|24|30|12");
+    expect(key).toContain("workshop-bench|1.0.0|laps=3|profile=balanced-v1|24|30|14|12");
     expect(bestTimeKey({ ...identity, trackVersion: "1.0.1" })).not.toBe(key);
     expect(bestTimeKey({ ...identity, configuration: { laps: 4 } })).not.toBe(key);
     expect(bestTimeKey({ ...identity, carProfileId: "speed-v1" })).not.toBe(key);

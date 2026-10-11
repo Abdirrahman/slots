@@ -284,9 +284,12 @@ def wheel(name: str, spec: dict[str, Any], materials: dict[str, bpy.types.Materi
         (0.02, rim_face - 0.018 * outer),
     ]
     parts.append((*revolved_shell(rim_profile, segments=18), 1))
+    # The hub's back annulus is buried inside the rim rather than laid exactly on its front
+    # face. At `rim_face - 0.018` the two were coplanar over the whole hub radius, which is a
+    # z-fighting pair the shadow pass renders from both sides.
     hub_profile = [
-        (0.02, rim_face - 0.018 * outer),
-        (radius * 0.17, rim_face - 0.018 * outer),
+        (0.02, rim_face - 0.026 * outer),
+        (radius * 0.17, rim_face - 0.026 * outer),
         (radius * 0.14, rim_face - 0.002 * outer),
         (0.02, rim_face - 0.002 * outer),
     ]
@@ -546,6 +549,39 @@ def centre_parts(parts: list[bpy.types.Object]) -> None:
         obj.data.update()
 
 
+def mesh_centre(obj: bpy.types.Object) -> Vector:
+    """The centre of an object's own vertices, in its local space."""
+    vertices = obj.data.vertices
+    return Vector([
+        (min(vertex.co[axis] for vertex in vertices) + max(vertex.co[axis] for vertex in vertices)) / 2.0
+        for axis in range(3)
+    ])
+
+
+def seat_wheel_origins(parts: list[bpy.types.Object]) -> None:
+    """
+    Moves each wheel's object origin onto its own hub, leaving every other part baked at the
+    car origin.
+
+    A wheel is the one part the runtime animates: `spinWheels` turns the object about its
+    local X axis, which is the axle only if the origin sits on the axle. `wheel()` bakes its
+    placement into mesh data and `centre_parts` shifts every vertex again, so without this
+    the origin stays at the car's centre and the spin becomes an orbit around the car. The
+    mesh is a solid of revolution about its axle, so its own bounding-box centre is the hub.
+
+    World positions are unchanged; only the point the runtime rotates about moves. Rotation
+    and scale stay applied, which is what the pipeline and validation actually require.
+    """
+    for obj in parts:
+        if not obj.name.startswith("wheel-"):
+            continue
+        hub = mesh_centre(obj)
+        for vertex in obj.data.vertices:
+            vertex.co -= hub
+        obj.data.update()
+        obj.location = obj.location + hub
+
+
 def scene_dimensions(parts: list[bpy.types.Object]) -> tuple[float, float, float]:
     points = [obj.matrix_world @ Vector(corner) for obj in parts for corner in obj.bound_box]
     minimum = [min(point[index] for point in points) for index in range(3)]
@@ -588,6 +624,7 @@ def build_all() -> list[dict[str, Any]]:
         reset_scene()
         root, parts = build_car(spec)
         centre_parts(parts)
+        seat_wheel_origins(parts)
         dimensions_xyz = scene_dimensions(parts)
         triangles = triangle_count(parts)
         if triangles > TRIANGLE_BUDGET:

@@ -10,14 +10,14 @@ Each car is a moulded toy slot car rather than a stack of boxes:
 - **wheel arches grown into that same loft** as fender haunches (`haunched_stations`), rather than swept as separate solids;
 - a **two-tone canopy** (`tinted_shell`) whose upper band takes the body material, so the roof is the canopy's own surface, plus a body-coloured beltline around its base;
 - a guide blade, guide post, and copper braids under the nose, the detail that reads as a slot car;
-- wheels built as one object each — tyre, dished rim, hub, and five spokes in three material slots — so the runtime can spin them by name;
+- wheels built as one object each — tyre, dished rim, hub, and five spokes in three material slots — each with its origin on its own hub, so the runtime can spin them by name;
 - head and tail lamps at low emission, the tail lamps driven from Car state at runtime, plus splitter and diffuser;
 - a roof glyph (disc, triangle, square, cross) set nearly flush into the roof, in a marking colour picked for contrast against the body; and
 - livery stripes that follow the body's own upper surface (`surface_ribbon`) across the hood and rear deck, where the chase camera looks.
 
 ### Appearance fixes, and what caused them
 
-Five of these are corrections to specific reported faults, recorded here because the causes were
+Six of these are corrections to specific reported faults, recorded here because the causes were
 not what they looked like:
 
 - **Arches read as detached fins.** They were separate swept solids standing proud of a body
@@ -30,12 +30,22 @@ not what they looked like:
   the part that was not visible from the cards — **the hub cap and spokes projected through the
   outer tyre face**, making them the widest part of the car and catching side light. Recessing
   both behind the tyre face and shrinking the rim to 46% lets the tyre hold the silhouette.
+- **Wheels orbited the car instead of spinning.** This one was invisible on the cards and on a
+  parked car, and obvious the moment a car moved. `wheel()` applied its placement into mesh
+  data and `centre_parts` shifted every vertex again, so each wheel object's origin was left at
+  the car's own origin while its hub sat 0.72–0.75 units away. The runtime spins a wheel by
+  turning the object about its local X axis, so that origin turned the spin into an orbit on a
+  0.72-unit radius, sweeping each wheel up through the body and below the bench. `seat_wheel_origins`
+  now moves each wheel's origin onto its own hub after centring, leaving world positions
+  untouched, and validation fails the build if a wheel's geometry is not centred on its origin.
+  The runtime's spin direction was wrong too, and had been hidden by the orbit: forward is local
+  `+Z`, so rolling forward is a *positive* turn about `+X`.
 - **Canopy read as a hole.** Its base colour was `0.04, 0.08, 0.12`. It is now a light smoked
   tint with a body-coloured roof and beltline giving the greenhouse structure.
 - **Livery read as an accidental rocker panel.** The stripe sat at maximum body half-width, low
   down, where it intersected the arches. It is now paint on the upper surfaces.
 
-Cars are centred and set on the ground automatically after assembly (`centre_parts`), so authored numbers stay readable instead of pre-compensated.
+Cars are centred and set on the ground automatically after assembly (`centre_parts`), so authored numbers stay readable instead of pre-compensated. Wheels are the one exception to the pipeline's everything-baked-at-the-origin rule: `seat_wheel_origins` runs after centring and gives each wheel an object origin on its own hub, because that origin is the axle the runtime rotates about.
 
 ## Inspected game constraints
 
@@ -98,7 +108,7 @@ A clean environment is intentional on this workstation: its shell-managed Python
 blender --background --factory-startup --python blender/scripts/build_assets.py
 ```
 
-`build_assets.py` starts from factory settings for every variant, and `car_shapes.py` holds the mesh construction helpers, writes all outputs, and invokes `validate_assets.py`. Validation checks output presence, 512×512 RGBA cards, applied rotation/scale, root placement, ground contact, lane fit, Principled materials, triangle budget, valid normals, manifold meshes, material assignments, wheel names, and GLB re-import.
+`build_assets.py` starts from factory settings for every variant, and `car_shapes.py` holds the mesh construction helpers, writes all outputs, and invokes `validate_assets.py`. Validation checks output presence, 512×512 RGBA cards, applied rotation/scale, root placement, ground contact, lane fit, Principled materials, triangle budget, valid normals, manifold meshes, material assignments, wheel names, **wheel origins seated on their hubs in both the source scene and the round-tripped GLB**, and GLB re-import.
 
 To validate existing outputs without regenerating:
 

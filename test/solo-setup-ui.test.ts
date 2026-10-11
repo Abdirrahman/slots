@@ -11,7 +11,11 @@ describe("Solo Quick Race setup markup", () => {
     expect(html).toContain('<label for="solo-bot-difficulty">Difficulty</label>');
     expect(html).toContain('<select id="solo-bot-difficulty"');
     for (const difficulty of ["easy", "normal", "hard"]) expect(html).toContain(`<option value="${difficulty}"`);
-    expect(html).toContain('<button id="solo-button" type="button" disabled>Start Solo Race</button>');
+    expect(html.match(/<button\b[^>]*id="solo-button"[^>]*>Play single player<\/button>/gu)).toHaveLength(1);
+    expect(html.indexOf('id="solo-button"')).toBeLessThan(html.indexOf('<summary>Race options</summary>'));
+    expect(html.indexOf('id="solo-button"')).toBeLessThan(html.indexOf('id="garage-panel"'));
+    expect(html).toMatch(/<input\b[^>]*id="driving-assist"[^>]*\bchecked\b/u);
+    expect(html.match(/<input\b[^>]*id="guest-name"[^>]*>/u)?.[0]).not.toContain("required");
   });
 
   test("keeps both private multiplayer actions available", () => {

@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "id": "dining-table-run",
+  "version": "1.0.0",
+  "length": 340.285533,
+  "lanes": [
+    {
+      "index": 0
+    },
+    {
+      "index": 1
+    },
+    {
+      "index": 2
+    },
+    {
+      "index": 3
+    }
+  ],
+  "startFinish": 0,
+  "checkpoints": [
+    {
+      "id": "checkpoint-east-bridge",
+      "progress": 127.468195
+    },
+    {
+      "id": "checkpoint-table-tunnel",
+      "progress": 201.692633
+    },
+    {
+      "id": "checkpoint-west-sweeper",
+      "progress": 275.103474
+    }
+  ],
+  "fixedObstacles": [],
+  "powerUpOpportunities": [
+    {
+      "id": "pickup-bridge",
+      "progress": 60,
+      "allowedEffects": [
+        "boost",
+        "shield",
+        "hazard"
+      ],
+      "spawnRadius": 10
+    },
+    {
+      "id": "pickup-home",
+      "progress": 30,
+      "allowedEffects": [
+        "boost",
+        "shield",
+        "hazard"
+      ],
+      "spawnRadius": 12
+    },
+    {
+      "id": "pickup-table",
+      "progress": 187,
+      "allowedEffects": [
+        "boost",
+        "shield",
+        "hazard"
+      ],
+      "spawnRadius": 6
+    },
+    {
+      "id": "pickup-west",
+      "progress": 233,
+      "allowedEffects": [
+        "boost",
+        "shield",
+        "hazard"
+      ],
+      "spawnRadius": 10
+    }
+  ],
+  "hazardPlacementLocations": [
+    {
+      "id": "hazard-bridge",
+      "progress": 132.711358,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hazard-home",
+      "progress": 44.237119,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hazard-table",
+      "progress": 221.185596,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hazard-west",
+      "progress": 296.048413,
+      "allowedLanes": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "corners": [
+    {
+      "id": "corner-east",
+      "fromProgress": 83.122242,
+      "toProgress": 174.079521,
+      "laneSpeedLimits": [
+        19,
+        18,
+        17,
+        16
+      ]
+    },
+    {
+      "id": "corner-west",
+      "fromProgress": 252.300031,
+      "toProgress": 0,
+      "laneSpeedLimits": [
+        19,
+        18,
+        17,
+        16
+      ]
+    }
+  ],
+  "presentation": {
+    "path": [
+      {
+        "progress": 0,
+        "x": -22,
+        "y": 0.65,
+        "z": -25,
+        "bank": 0
+      },
+      {
+        "progress": 30.154687,
+        "x": 0,
+        "y": 0.65,
+        "z": -25,
+        "bank": 0
+      },
+      {
+        "progress": 60.309419,
+        "x": 22,
+        "y": 0.65,
+        "z": -25,
+        "bank": 0
+      },
+      {
+        "progress": 83.122242,
+        "x": 38,
+        "y": 0.85,
+        "z": -21,
+        "bank": -0.08
+      },
+      {
+        "progress": 103.432882,
+        "x": 46,
+        "y": 2.5,
+        "z": -9,
+        "bank": -0.14
+      },
+      {
+        "progress": 127.468195,
+        "x": 46,
+        "y": 6,
+        "z": 8,
+        "bank": -0.12
+      },
+      {
+        "progress": 149.585852,
+        "x": 37,
+        "y": 6,
+        "z": 21,
+        "bank": -0.12
+      },
+      {
+        "progress": 174.079521,
+        "x": 20,
+        "y": 3,
+        "z": 25,
+        "bank": -0.06
+      },
+      {
+        "progress": 201.692633,
+        "x": 0,
+        "y": 0.65,
+        "z": 25,
+        "bank": 0
+      },
+      {
+        "progress": 229.125982,
+        "x": -20,
+        "y": 0.65,
+        "z": 25,
+        "bank": -0.04
+      },
+      {
+        "progress": 252.300031,
+        "x": -36,
+        "y": 0.65,
+        "z": 20,
+        "bank": -0.1
+      },
+      {
+        "progress": 275.103474,
+        "x": -46,
+        "y": 0.65,
+        "z": 7,
+        "bank": -0.12
+      },
+      {
+        "progress": 297.321678,
+        "x": -46,
+        "y": 0.65,
+        "z": -9,
+        "bank": -0.1
+      },
+      {
+        "progress": 317.478097,
+        "x": -38,
+        "y": 0.65,
+        "z": -21,
+        "bank": -0.06
+      }
+    ]
+  }
+}

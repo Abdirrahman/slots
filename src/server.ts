@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { WORKSHOP_TRACK } from "./authored-track";
+import { DEFAULT_TRACK } from "./authored-track";
 import { MAX_EVENT_BATCH, MAX_MESSAGE_BYTES, SERVER_TICKS_PER_SECOND } from "./multiplayer-config";
 import { PROTOCOL_VERSION, ProtocolError, parseClientCommand, type ClientCommand } from "./protocol";
 import type { CarProfile, RaceConfiguration, RaceEvent, Track } from "./race";
@@ -95,9 +95,10 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         code,
         hostId: playerId,
         hostName: command.name,
-        track: options.track ?? WORKSHOP_TRACK,
+        ...(command.carAssetId === undefined ? {} : { hostCarAssetId: command.carAssetId }),
+        track: options.track ?? DEFAULT_TRACK,
         ...(options.carProfile === undefined ? {} : { carProfile: options.carProfile }),
-        ...(options.configuration === undefined ? {} : { configuration: options.configuration }),
+        ...((command.configuration ?? options.configuration) === undefined ? {} : { configuration: command.configuration ?? options.configuration }),
         ...(command.type === "create_solo_race" ? {
           soloConfiguration: { botCount: command.botCount, botDifficulty: command.botDifficulty },
         } : {}),
@@ -119,7 +120,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
       const room = rooms.get(command.roomCode);
       if (room === undefined) throw new Error("Room not found");
       const playerId = randomUUID();
-      room.join(playerId, command.name);
+      room.join(playerId, command.name, command.carAssetId);
       bind(connection, room, room.connectionIdentity(playerId)!);
       sendIdentity(connection);
       broadcast(room);
@@ -150,7 +151,15 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
       room.acceptInput(playerId, connection.generation!, command);
       return;
     }
+    if (command.configuration !== undefined && command.configuration.rules !== room.snapshot(playerId).configuration.rules) throw new Error("Rematch must retain its rules preset");
     if (!room.rematch(playerId, command.raceId)) throw new Error("Only the Host can rematch current Results");
+    if (command.configuration !== undefined) {
+      const current = room.snapshot(playerId);
+      if (command.configuration.rules !== current.configuration.rules) throw new Error("Rematch must retain its rules preset");
+      room.configureRace(playerId, command.configuration);
+    }
+    const ready = room.snapshot(playerId);
+    if (ready.soloConfiguration !== null && ready.configuration.rules !== undefined) room.startRace(playerId);
     broadcast(room);
   }
 

@@ -288,7 +288,7 @@ describe("authoritative snapshot presentation", () => {
     });
     const recoveryPair = acceptSnapshot(acceptSnapshot(null, previous), recovering);
     expect(interpolateSnapshotCar(recoveryPair, "local-car", 0.5)).toEqual(
-      predictLocalCarPose(recovering.state.race!, "local-car", 0),
+      predictLocalCarPose(recoveryPair, "local-car", 0),
     );
 
     const ghost = message(3, {
@@ -298,53 +298,116 @@ describe("authoritative snapshot presentation", () => {
     });
     const ghostPair = acceptSnapshot(recoveryPair, ghost);
     expect(interpolateSnapshotCar(ghostPair, "local-car", 0.5)).toEqual(
-      predictLocalCarPose(ghost.state.race!, "local-car", 0),
+      predictLocalCarPose(ghostPair, "local-car", 0),
     );
   });
 
-  test("limits prediction to one snapshot interval and lets each snapshot reset correction", () => {
+  test("predicts the local Lane on an authored Track carrying obstacles and pickups", () => {
+    // The Workshop Bench has fixed obstacles, pickup opportunities and live Hazards, which is
+    // exactly the Track that used to switch prediction off altogether.
     const authority = message(1);
-    const raceBefore = structuredClone(authority.state.race!);
-    const predicted = predictLocalCarPose(authority.state.race!, "local-car", 10, 1);
-    const corrected = predictLocalCarPose(authority.state.race!, "local-car", 0);
+    const track = authority.state.race!.track;
+    expect(track.fixedObstacles!.length).toBeGreaterThan(0);
+    expect(track.powerUpOpportunities!.length).toBeGreaterThan(0);
 
-    expect(predicted).not.toEqual(corrected);
-    expect(corrected).toEqual(interpolateSnapshotCar(acceptSnapshot(null, authority), "local-car", 1));
-    expect(authority.state.race).toEqual(raceBefore);
-    const finishedRace = {
-      ...authority.state.race!,
-      cars: authority.state.race!.cars.map((car) => ({ ...car, finishedAtSeconds: 1, result: "finished" as const })),
-    };
-    expect(predictLocalCarPose(finishedRace, "local-car", 10, 1)).toEqual(corrected);
-    const contactRace = {
+    const pair = acceptSnapshot(null, authority);
+    const settled = predictLocalCarPose(pair, "local-car", 0);
+    const changing = predictLocalCarPose(pair, "local-car", 0.05, 1);
+    expect(changing!.lanePosition).toBeGreaterThan(settled!.lanePosition);
+    expect(predictLocalCarPose(pair, "local-car", 0.05, -1)!.lanePosition).toBeLessThan(settled!.lanePosition);
+  });
+
+  test("takes forward travel from authority while a Track can interrupt it", () => {
+    const authority = message(1);
+    const pair = acceptSnapshot(null, authority);
+    const car = authority.state.race!.cars[0]!;
+    const moving = message(2, { ...authority.state.race!, tick: 1, cars: [{ ...car, progress: car.progress + 3 }] });
+    const movingPair = acceptSnapshot(pair, moving);
+
+    // Lane is predicted, so the pose differs from pure interpolation; progress is not, so it
+    // matches the interpolated progress exactly at the same Lane.
+    const alpha = snapshotAlpha(0.05);
+    const interpolated = interpolateSnapshotCar(movingPair, "local-car", alpha)!;
+    const predicted = predictLocalCarPose(movingPair, "local-car", 0.05, 1)!;
+    expect(predicted.lanePosition).toBeGreaterThan(interpolated.lanePosition);
+    expect(predictLocalCarPose(movingPair, "local-car", 0.05)).toEqual(interpolated);
+  });
+
+  test("extrapolates forward travel only when nothing on the Track can interrupt it", () => {
+    const authority = message(1);
+    const race = authority.state.race!;
+    const clear = message(1, {
+      ...race,
+      track: { ...race.track, fixedObstacles: [], powerUpOpportunities: [] },
+      powerUpOpportunities: [],
+      hazards: [],
+    });
+    const pair = acceptSnapshot(null, clear);
+    const settled = predictLocalCarPose(pair, "local-car", 0)!;
+    const ahead = predictLocalCarPose(pair, "local-car", 0.05)!;
+    expect(ahead).not.toEqual(settled);
+    // Still bounded by one snapshot interval, so a stalled connection cannot run away.
+    expect(predictLocalCarPose(pair, "local-car", 10)).toEqual(predictLocalCarPose(pair, "local-car", snapshotAlpha(10) / 15));
+    expect(snapshotAlpha(10)).toBe(1);
+  });
+
+  test("keeps predicting the Lane through contact, Shield, Boost and Ghost state", () => {
+    const authority = message(1);
+    for (const state of [
+      { ordinaryContact: { leadingCarId: "lead", enteredAtTick: 0 } },
+      { shieldTicksRemaining: 1 },
+      { boostTicksRemaining: 1 },
+      { ghost: true },
+    ]) {
+      const race = { ...authority.state.race!, cars: authority.state.race!.cars.map((car) => ({ ...car, ...state })) };
+      const before = structuredClone(race);
+      const pair = acceptSnapshot(null, message(1, race));
+      expect(predictLocalCarPose(pair, "local-car", 0.05, 1)!.lanePosition)
+        .toBeGreaterThan(predictLocalCarPose(pair, "local-car", 0)!.lanePosition);
+      expect(race).toEqual(before);
+    }
+  });
+
+  test("stops predicting the Lane for a Car that cannot act on the input", () => {
+    const authority = message(1);
+    for (const state of [
+      { crashRecoveryTicksRemaining: 1, speed: 0 },
+      { result: "finished" as const, finishedAtSeconds: 1 },
+      { result: "dnf" as const },
+    ]) {
+      const race = { ...authority.state.race!, cars: authority.state.race!.cars.map((car) => ({ ...car, ...state })) };
+      const pair = acceptSnapshot(null, message(1, race));
+      expect(predictLocalCarPose(pair, "local-car", 0.05, 1)).toEqual(predictLocalCarPose(pair, "local-car", 0));
+    }
+  });
+
+  test("refuses to predict a Lane change off the edge of the Track", () => {
+    const authority = message(1);
+    for (const [lane, direction] of [[0, -1], [3, 1]] as const) {
+      const race = { ...authority.state.race!, cars: authority.state.race!.cars.map((car) => ({ ...car, lane })) };
+      const pair = acceptSnapshot(null, message(1, race));
+      expect(predictLocalCarPose(pair, "local-car", 0.05, direction)).toEqual(predictLocalCarPose(pair, "local-car", 0));
+    }
+  });
+
+  test("advances an authoritative transition and runs a Blocked return backwards", () => {
+    const authority = message(1);
+    const withTransition = (phase: "changing" | "returning") => acceptSnapshot(null, message(1, {
       ...authority.state.race!,
       cars: authority.state.race!.cars.map((car) => ({
         ...car,
-        ordinaryContact: { leadingCarId: "lead", enteredAtTick: 0 },
+        lane: 1 as const,
+        laneTransition: { from: 1 as const, to: 2 as const, progress: 0.5, phase },
       })),
-    };
-    const contactBefore = structuredClone(contactRace);
-    expect(predictLocalCarPose(contactRace, "local-car", 10, 1)).toEqual(corrected);
-    expect(contactRace).toEqual(contactBefore);
-    for (const interactionState of [
-      { crashRecoveryTicksRemaining: 1 },
-      { ghost: true },
-      { shieldTicksRemaining: 1 },
-      { boostTicksRemaining: 1 },
-    ]) {
-      const interactionRace = {
-        ...authority.state.race!,
-        cars: authority.state.race!.cars.map((car) => ({ ...car, ...interactionState })),
-      };
-      const before = structuredClone(interactionRace);
-      expect(predictLocalCarPose(interactionRace, "local-car", 10, 1)).toEqual(corrected);
-      expect(interactionRace).toEqual(before);
-    }
-    const dnfRace = {
-      ...authority.state.race!,
-      cars: authority.state.race!.cars.map((car) => ({ ...car, result: "dnf" as const })),
-    };
-    expect(predictLocalCarPose(dnfRace, "local-car", 10, 1)).toEqual(corrected);
-    expect(snapshotAlpha(10)).toBe(1);
+    }));
+    const changing = withTransition("changing");
+    const returning = withTransition("returning");
+    // A held Lane edge never overrides the transition already running.
+    expect(predictLocalCarPose(changing, "local-car", 0.05, -1))
+      .toEqual(predictLocalCarPose(changing, "local-car", 0.05, 1));
+    expect(predictLocalCarPose(changing, "local-car", 0.05)!.lanePosition)
+      .toBeGreaterThan(predictLocalCarPose(changing, "local-car", 0)!.lanePosition);
+    expect(predictLocalCarPose(returning, "local-car", 0.05)!.lanePosition)
+      .toBeLessThan(predictLocalCarPose(returning, "local-car", 0)!.lanePosition);
   });
 });

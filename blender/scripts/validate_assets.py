@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from build_assets import CARD_DIR, CAR_SPECS, LANE_SPACING, MODEL_DIR, REPORT_PATH, SOURCE_DIR, TRIANGLE_BUDGET
+from build_assets import CARD_DIR, CAR_SPECS, LANE_SPACING, MODEL_DIR, REPORT_PATH, SOURCE_DIR, TRIANGLE_BUDGET, mesh_centre
 
 EPSILON = 1e-4
 EXPECTED_WHEELS = {"wheel-front-left", "wheel-front-right", "wheel-rear-left", "wheel-rear-right"}
@@ -69,6 +69,17 @@ def validate_mesh(asset_id: str, obj: bpy.types.Object) -> int:
     return len(mesh.loop_triangles)
 
 
+def validate_wheel_origin(asset_id: str, obj: bpy.types.Object, where: str) -> None:
+    """
+    The runtime spins a wheel by turning the object about its local X axis, so the origin has
+    to sit on the axle. An origin left at the car's centre turns that spin into an orbit and
+    is invisible on a static card, so it is checked here rather than looked at.
+    """
+    offset = mesh_centre(obj)
+    if any(not close(value, 0.0, 0.002) for value in offset):
+        fail(asset_id, f"{where} {obj.name} origin is {offset} from its own hub; the runtime would orbit it")
+
+
 def validate_source(spec: dict[str, Any]) -> dict[str, Any]:
     asset_id = spec["id"]
     source_path = SOURCE_DIR / f"{asset_id}.blend"
@@ -93,6 +104,9 @@ def validate_source(spec: dict[str, Any]) -> dict[str, Any]:
     wheel_names = {obj.name for obj in meshes if obj.name.startswith("wheel-")}
     if wheel_names != EXPECTED_WHEELS:
         fail(asset_id, f"wheel names are {sorted(wheel_names)}, expected {sorted(EXPECTED_WHEELS)}")
+    for obj in meshes:
+        if obj.name in EXPECTED_WHEELS:
+            validate_wheel_origin(asset_id, obj, "source")
 
     minimum, maximum = mesh_bounds(meshes)
     dimensions_blender = [maximum[index] - minimum[index] for index in range(3)]
@@ -147,6 +161,8 @@ def validate_outputs(spec: dict[str, Any]) -> None:
     for obj in imported_meshes:
         if len(obj.data.materials) == 0 or any(material is None for material in obj.data.materials):
             fail(asset_id, f"round-tripped mesh {obj.name} has a missing material")
+        if obj.name in EXPECTED_WHEELS:
+            validate_wheel_origin(asset_id, obj, "round-tripped")
 
 
 def validate_all() -> list[dict[str, Any]]:

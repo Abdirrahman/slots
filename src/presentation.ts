@@ -1,4 +1,4 @@
-import { WORKSHOP_PATH, WORKSHOP_TRACK } from "./authored-track";
+import { WORKSHOP_TRACK, resolveAuthoredTrack, type AuthoredPathPoint } from "./authored-track";
 import { DEFAULT_RACE_LAPS } from "./multiplayer-config";
 import {
   PROVISIONAL_CAR_PROFILE,
@@ -118,8 +118,9 @@ export function sampleTrackPose(
   progress: number,
   lane: number,
 ): TrackPose {
-  if (track.id === WORKSHOP_TRACK.id && track.version === WORKSHOP_TRACK.version) {
-    return sampleAuthoredPath(track.length, progress, lane);
+  const content = resolveAuthoredTrack(track);
+  if (content !== undefined) {
+    return sampleAuthoredPath(content.path, track.length, progress, lane);
   }
   const normalizedProgress = modulo(progress, track.length);
   const angle = (normalizedProgress / track.length) * Math.PI * 2 - Math.PI / 2;
@@ -135,22 +136,22 @@ export function sampleTrackPose(
   };
 }
 
-function sampleAuthoredPath(length: number, progress: number, lane: number): TrackPose {
+function sampleAuthoredPath(path: readonly AuthoredPathPoint[], length: number, progress: number, lane: number): TrackPose {
   const normalized = modulo(progress, length);
-  const count = WORKSHOP_PATH.length;
-  let segment = count - 1;
-  for (let index = 0; index < count; index += 1) {
-    const nextProgress = index + 1 === count ? length : WORKSHOP_PATH[index + 1]!.progress;
-    if (normalized >= WORKSHOP_PATH[index]!.progress && normalized < nextProgress) {
-      segment = index;
-      break;
-    }
+  const count = path.length;
+  let low = 0;
+  let high = count;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (path[middle]!.progress <= normalized) low = middle + 1;
+    else high = middle;
   }
+  const segment = low === 0 ? count - 1 : low - 1;
 
-  const previous = WORKSHOP_PATH[modulo(segment - 1, count)]!;
-  const from = WORKSHOP_PATH[segment]!;
-  const to = WORKSHOP_PATH[(segment + 1) % count]!;
-  const following = WORKSHOP_PATH[(segment + 2) % count]!;
+  const previous = path[modulo(segment - 1, count)]!;
+  const from = path[segment]!;
+  const to = path[(segment + 1) % count]!;
+  const following = path[(segment + 2) % count]!;
   const toProgress = segment + 1 === count ? length : to.progress;
   const amount = (normalized - from.progress) / (toProgress - from.progress);
   const x = catmullRom(previous.x, from.x, to.x, following.x, amount);
@@ -326,21 +327,59 @@ export function chaseCameraPose(
   };
 }
 
+/**
+ * Where a Car reads as being: how far along the Track, and how far across the Lanes.
+ *
+ * The two travel separately on purpose. Forward travel is the Track's to decide — an
+ * obstacle, a Hazard or a Car ahead can cut it short — while lateral travel is the Racer's
+ * own committed input. Keeping them apart lets the local Car predict the half it owns
+ * without guessing at the half it does not.
+ */
+export interface CarMotion {
+  readonly progress: number;
+  readonly lane: number;
+}
+
+export function interpolateCarMotion(
+  track: Pick<Track, "length">,
+  previous: CarState,
+  current: CarState,
+  alpha: number,
+): CarMotion {
+  const amount = clamp(alpha, 0, 1);
+  const progressDelta = modulo(current.progress - previous.progress, track.length);
+  return {
+    progress: modulo(previous.progress + progressDelta * amount, track.length),
+    lane: lerp(lanePosition(previous), lanePosition(current), amount),
+  };
+}
+
 export function interpolateCarPose(
   track: Pick<Track, "id" | "version" | "length">,
   previous: CarState,
   current: CarState,
   alpha: number,
 ): TrackPose {
-  const amount = clamp(alpha, 0, 1);
-  const progressDelta = modulo(current.progress - previous.progress, track.length);
-  const progress = modulo(previous.progress + progressDelta * amount, track.length);
-  const lane = lerp(lanePosition(previous), lanePosition(current), amount);
-  return sampleTrackPose(track, progress, lane);
+  const motion = interpolateCarMotion(track, previous, current, alpha);
+  return sampleTrackPose(track, motion.progress, motion.lane);
 }
 
+/**
+ * Where a Lane transition reads as being, given how far the authoritative transition has run.
+ *
+ * The authoritative transition advances by a fixed fraction per tick, and drawing that
+ * straight through reads as a Car being slid sideways by a machine. Easing it puts the
+ * lateral speed where a Racer expects it — nothing at the moment of commitment, most of it
+ * across the middle of the Lane, nothing again as the Car settles.
+ *
+ * This is presentation only. `transition.progress` remains the authoritative number and
+ * nothing here feeds back into it; Lane occupancy, contact and corner limits all read the
+ * simulation's own Lane state, which never sees this curve. A "returning" transition runs
+ * the same curve backwards, so a Blocked change eases out and back rather than snapping.
+ */
 function interpolateTransition(transition: LaneTransition): number {
-  return lerp(transition.from, transition.to, clamp(transition.progress, 0, 1));
+  const progress = clamp(transition.progress, 0, 1);
+  return lerp(transition.from, transition.to, progress * progress * (3 - 2 * progress));
 }
 
 function lerp(from: number, to: number, amount: number): number {

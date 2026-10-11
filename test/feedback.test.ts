@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { EventFeedbackConsumer, feedbackForEvent, resultTransitionFeedback, type IdentifiedRaceEvent } from "../src/feedback";
+import { EventFeedbackConsumer, feedbackForEvent, raceEventInvolvesCar, resultTransitionFeedback, type IdentifiedRaceEvent } from "../src/feedback";
 import type { RaceEvent } from "../src/race";
 
 const timed = { tick: 7, timeSeconds: 0.25 };
@@ -23,6 +23,13 @@ const events: RaceEvent[] = [
 const identified: IdentifiedRaceEvent[] = events.map((event, index) => ({ id: `race-1:7:${index}`, event }));
 
 describe("authoritative event feedback", () => {
+  test("driver feedback excludes opponents' events and includes either side of contact", () => {
+    expect(raceEventInvolvesCar({ ...timed, type: "boost_activated", carId: "you", chargesRemaining: 1 }, "you")).toBe(true);
+    expect(raceEventInvolvesCar({ ...timed, type: "blocked_lane_change", carId: "bot" }, "you")).toBe(false);
+    expect(raceEventInvolvesCar({ ...timed, type: "ordinary_collision", carId: "bot", leadingCarId: "you" }, "you")).toBe(true);
+    expect(raceEventInvolvesCar({ ...timed, type: "boosted_impact", carId: "bot", targetCarId: "you" }, "you")).toBe(true);
+    expect(raceEventInvolvesCar({ ...timed, type: "hazard_activated", hazardId: "mine" }, "you")).toBe(false);
+  });
   test("maps every RaceEvent type to deterministic camera, audio, effect, and legible feedback", () => {
     const before = structuredClone(identified);
     const feedback = identified.map((event) => feedbackForEvent(event, false));

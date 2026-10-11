@@ -16,15 +16,6 @@ export function laneIntentForKey(code: string, repeat: boolean): LaneChangeDirec
   return undefined;
 }
 
-export function isBoostControlKey(code: string): boolean {
-  return code === "Space" || code === "KeyW" || code === "ArrowUp";
-}
-
-/** Boost is spent on the key's leading edge only, so holding it cannot drain the meter. */
-export function boostIntentForKey(code: string, repeat: boolean): true | undefined {
-  return !repeat && isBoostControlKey(code) ? true : undefined;
-}
-
 export function isEditingControl(target: KeyboardTarget | null): boolean {
   return target !== null && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName));
 }

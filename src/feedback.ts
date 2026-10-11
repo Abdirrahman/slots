@@ -14,6 +14,13 @@ export interface EventFeedback {
 
 export interface IdentifiedRaceEvent { readonly id: string; readonly event: RaceEvent }
 
+/** Driver feedback includes both sides of contact, but excludes unrelated opponents. */
+export function raceEventInvolvesCar(event: RaceEvent, carId: string): boolean {
+  return "carId" in event && (event.carId === carId
+    || event.type === "boosted_impact" && event.targetCarId === carId
+    || event.type === "ordinary_collision" && event.leadingCarId === carId);
+}
+
 export class EventFeedbackConsumer {
   private raceId: string | null = null;
   private readonly seen = new Set<string>();

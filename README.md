@@ -112,3 +112,7 @@ The current suite contains **277 passing tests**, including real WebSocket integ
 <sub>FOUR LANES. ONE FINISH LINE.</sub><br>
 <strong>See you on the dining-room floor.</strong>
 </div>
+
+## Dependency security
+
+Dependabot checks dependencies and GitHub Actions weekly. The dependency checks workflow also runs `bun audit`, the available frontend checks, and a production build daily and on pull requests. This covers transitive packages in `bun.lock`, which GitHub's dependency graph does not parse.
